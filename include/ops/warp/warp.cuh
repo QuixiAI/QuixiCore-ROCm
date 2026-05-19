@@ -11,3 +11,9 @@
 #include "register/register.cuh"
 #include "shared/shared.cuh"
 #include "memory/memory.cuh"
+
+#ifdef KITTENS_UDNA1
+#include "sync/sync.cuh"
+#include "sched/sched.cuh"
+#include "cluster/cluster.cuh"
+#endif
