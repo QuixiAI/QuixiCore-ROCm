@@ -688,4 +688,129 @@ __device__ inline static void store(ST &dst, const RT &src) {
     }
 }
 
+/* ========================================================================== *
+ * gfx1250 shared -> register loads
+ *
+ * Two flavors:
+ *  - `load_b128`  : wide `ds_load_b128` per lane, two loads per 16x32 subtile.
+ *                   Honors a `Pad` descriptor so kernels can use padded LDS
+ *                   layouts without writing offset math.
+ *  - `load_b32`   : narrow `ds_load_b32` per lane (correctness baseline; used
+ *                   for the un-optimized naive rung of the GEMM ladder).
+ *
+ * The destination is a `rt_bf<WARP_M, WARP_K, row_l, rt_16x32_s>` whose lane
+ * storage is `bf16_2 data[8]` per subtile when `WARP_THREADS == 32`. This is
+ * the operand layout consumed directly by `__builtin_amdgcn_wmma_f32_16x16x32_bf16`.
+ * ========================================================================== */
+#ifdef KITTENS_UDNA1
+
+namespace detail {
+/// @brief Subtile geometry constants -- must match `subtile_flat` in g2s helpers.
+inline constexpr int GFX1250_SUB_ROWS  = 16;
+inline constexpr int GFX1250_SUB_COLS  = 32;
+inline constexpr int GFX1250_SUB_ELEMS = GFX1250_SUB_ROWS * GFX1250_SUB_COLS;
+} // namespace detail
+
+/**
+ * @brief Wide (`ds_load_b128`) shared -> register load for gfx1250.
+ *
+ * Each lane issues two `ds_load_b128` instructions per 16x32 subtile,
+ * filling the 16 `bf16` elements per lane required by the WMMA bf16 operand
+ * layout. The `Pad` descriptor controls LDS placement; pass `lds_nopad` for
+ * flat tiles and `lds_pad_default` (or any `lds_padded<I,A>`) for padded.
+ *
+ * @tparam Pad    Padding descriptor (`lds_nopad` or `lds_padded<...>`).
+ * @tparam WARP_M, WARP_K   Per-warp tile dimensions (must be multiples of 16/32).
+ * @param dst            Destination register tile.
+ * @param warp_lds_base  Pointer into LDS at the warp's tile origin.
+ */
+template<typename Pad, int WARP_M, int WARP_K>
+__device__ inline void load_b128(
+    rt_bf<WARP_M, WARP_K, ducks::rt_layout::row, ducks::rt_shape::rt_16x32>& dst,
+    const bf16* __restrict__ warp_lds_base)
+{
+    constexpr int height       = WARP_M / detail::GFX1250_SUB_ROWS;
+    constexpr int width        = WARP_K / detail::GFX1250_SUB_COLS;
+    constexpr int subs_per_row = WARP_K / detail::GFX1250_SUB_COLS;
+
+    const int L    = kittens::laneid();
+    const int row  = L % 16;
+    const int half = L / 16;
+
+    #pragma unroll
+    for (int ti = 0; ti < height; ti++) {
+        #pragma unroll
+        for (int tj = 0; tj < width; tj++) {
+            const int sub_id     = ti * subs_per_row + tj;
+            const int base_flat  = sub_id * detail::GFX1250_SUB_ELEMS
+                                 + row * detail::GFX1250_SUB_COLS
+                                 + half * 16;
+            const int padded_off = Pad::padded(base_flat);
+
+            const uint32_t addr = static_cast<uint32_t>(
+                reinterpret_cast<uintptr_t>(warp_lds_base + padded_off));
+
+            float4 lo, hi;
+            asm volatile("ds_load_b128 %0, %1 offset:0\n"
+                : "=v"(lo) : "v"(addr) : "memory");
+            asm volatile("ds_load_b128 %0, %1 offset:16\n"
+                : "=v"(hi) : "v"(addr) : "memory");
+
+            bf16_2* lo_p = reinterpret_cast<bf16_2*>(&lo);
+            bf16_2* hi_p = reinterpret_cast<bf16_2*>(&hi);
+
+            dst.tiles[ti][tj].data[0] = lo_p[0];
+            dst.tiles[ti][tj].data[1] = lo_p[1];
+            dst.tiles[ti][tj].data[2] = lo_p[2];
+            dst.tiles[ti][tj].data[3] = lo_p[3];
+            dst.tiles[ti][tj].data[4] = hi_p[0];
+            dst.tiles[ti][tj].data[5] = hi_p[1];
+            dst.tiles[ti][tj].data[6] = hi_p[2];
+            dst.tiles[ti][tj].data[7] = hi_p[3];
+        }
+    }
+}
+
+/**
+ * @brief Narrow (`ds_load_b32`) shared -> register load for gfx1250 -- correctness baseline.
+ *
+ * Each lane reads 16 bf16 elements as 8 b32 packed pairs from the flat LDS
+ * layout (no padding). Useful for the naive rung of the ladder and as a
+ * fallback when the wide `b128` path can't satisfy alignment constraints.
+ */
+template<int WARP_M, int WARP_K>
+__device__ inline void load_b32(
+    rt_bf<WARP_M, WARP_K, ducks::rt_layout::row, ducks::rt_shape::rt_16x32>& dst,
+    const bf16* __restrict__ warp_lds_base)
+{
+    constexpr int height       = WARP_M / detail::GFX1250_SUB_ROWS;
+    constexpr int width        = WARP_K / detail::GFX1250_SUB_COLS;
+    constexpr int subs_per_row = WARP_K / detail::GFX1250_SUB_COLS;
+
+    const int L    = kittens::laneid();
+    const int row  = L % 16;
+    const int half = L / 16;
+
+    #pragma unroll
+    for (int ti = 0; ti < height; ti++) {
+        #pragma unroll
+        for (int tj = 0; tj < width; tj++) {
+            const int sub_id    = ti * subs_per_row + tj;
+            const int base_flat = sub_id * detail::GFX1250_SUB_ELEMS
+                                + row * detail::GFX1250_SUB_COLS
+                                + half * 16;
+
+            const bf16_2* lds_p = reinterpret_cast<const bf16_2*>(
+                warp_lds_base + base_flat);
+
+            #pragma unroll
+            for (int k = 0; k < 8; k++) {
+                dst.tiles[ti][tj].data[k] = lds_p[k];
+            }
+        }
+    }
+}
+
+#endif // KITTENS_UDNA1
+
 } // namespace kittens
