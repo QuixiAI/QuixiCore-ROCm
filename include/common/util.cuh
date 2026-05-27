@@ -125,10 +125,14 @@ __host__ __device__ inline int ceil_div(int a, int b) {
 /**
  * @brief LDS capacity exposed by default per workgroup on gfx1250.
  *
- * The gfx1250 LDS/WGP$ pool is 384 KB split into six 64 KB segments. At least one
- * segment must remain as WGP$, leaving up to 320 KB addressable as LDS. The
- * library default is one segment (64 KB); kernels needing more should request
- * a larger dynamic shared-memory size at launch via `hipFuncSetAttribute`.
+ * On gfx1250, the **LDS scratchpad and the L1 data cache are one 384 KB SRAM
+ * pool per Work-Group Processor (WGP)**, partitioned at dispatch time into six
+ * 64 KB segments. At least one segment must remain L1, leaving up to 320 KB
+ * addressable as LDS. (L1 is also referred to as WGP$ or WGP-cache.)
+ *
+ * The library default exposes one segment (64 KB) of LDS; kernels needing
+ * more should request a larger dynamic shared-memory size at launch via
+ * `hipFuncSetAttribute`.
  */
 constexpr int MAX_SHARED_MEMORY = 65536;
 constexpr int LDS_SEGMENT_BYTES = 65536;
@@ -300,11 +304,19 @@ struct KITTENS_DEFAULT_ALIGN alignment_dummy { int dummy; };
 /**
  * @brief Compile-time tag selecting an LDS segment for tile placement on gfx1250.
  *
- * The gfx1250 LDS has six 64KB segments served by two read ports at 256 B/cycle
- * each. Placing operands `A` in `segment<0>` and `B` in `segment<1>` lets the
- * hardware satisfy `A` and `B` reads from distinct ports in parallel, reaching
- * the full 512 B/cycle peak. Segment 5 is conventionally reserved as WGP$,
- * leaving indices 0..4 available.
+ * Background. LDS and L1 share one 384 KB SRAM pool per Work-Group Processor
+ * (WGP), partitioned at dispatch into six 64 KB segments (see
+ * `MAX_SHARED_MEMORY` above). Up to five segments (indices 0..4, total
+ * 320 KB) are addressable as LDS scratchpad; at least one segment must remain
+ * L1. By convention we leave segment 5 as L1, so LDS-tile placement uses
+ * indices 0..4.
+ *
+ * Why segments matter. The LDS half of the pool is fronted by two read ports
+ * delivering 256 B/cycle each. The two ports can issue in the same cycle only
+ * when they target **different** segments, so placing operand `A` in
+ * `segment<0>` and operand `B` in `segment<1>` lets the hardware satisfy both
+ * reads in parallel and reach the full 512 B/cycle peak. Co-locating `A` and
+ * `B` in the same segment serialises them at 256 B/cycle.
  *
  * @tparam IDX 0..4 -- segment index. The allocator aligns the allocation start
  * to `IDX * 64 KB` so multiple tiles can share a single segment.
