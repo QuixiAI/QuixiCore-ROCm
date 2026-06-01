@@ -135,15 +135,15 @@ __device__ __forceinline__ void wait_async() {
  *   load_tdm(buf[1], ...);
  *   load_tdm(buf[2], ...);
  *   for (int k = 0; k + 3 < K; ++k) {
- *       sync::wait_tensor<2>();           // drain one slot, two stay in flight
+ *       sync::wait_tdm<2>();              // drain one slot, two stay in flight
  *       consume(buf[k % 3]);
  *       load_tdm(buf[k % 3], ...);
  *   }
- *   sync::wait_tensor<0>();               // drain the tail
+ *   sync::wait_tdm<0>();                  // drain the tail
  * @endcode
  */
 template<int N = 0>
-__device__ __forceinline__ void wait_tensor() {
+__device__ __forceinline__ void wait_tdm() {
     static_assert(N >= 0 && N < 64, "tensorcnt is 6-bit; max 63");
     __builtin_amdgcn_s_wait_tensorcnt(N);
 }

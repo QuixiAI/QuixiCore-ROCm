@@ -100,13 +100,13 @@ void gemm_tdm_arrive_kernel(const gemm_globals g, int M, int N, int K)
     if (wid == 0) {
         g2s::load_tdm<Pad, BLOCK_M, K_STEP>(
             A_lds[0], g.a, {0, 0, tile_m, 0}, M, K, K);
-        sync::wait_tensor();
+        sync::wait_tdm();
         if (laneid() == 0) sync::async_barrier_arrive(&A_bar[0].state);
     }
     if (wid == 1) {
         g2s::load_tdm<Pad, BLOCK_N, K_STEP>(
             B_lds[0], g.b, {0, 0, tile_n, 0}, N, K, K);
-        sync::wait_tensor();
+        sync::wait_tdm();
         if (laneid() == 0) sync::async_barrier_arrive(&B_bar[0].state);
     }
 
@@ -122,13 +122,13 @@ void gemm_tdm_arrive_kernel(const gemm_globals g, int M, int N, int K)
                 if (wid == 0) {
                     g2s::load_tdm<Pad, BLOCK_M, K_STEP>(
                         A_lds[nxt], g.a, {0, 0, tile_m, k + 1}, M, K, K);
-                    sync::wait_tensor();
+                    sync::wait_tdm();
                     if (laneid() == 0) sync::async_barrier_arrive(&A_bar[nxt].state);
                 }
                 if (wid == 1) {
                     g2s::load_tdm<Pad, BLOCK_N, K_STEP>(
                         B_lds[nxt], g.b, {0, 0, tile_n, k + 1}, N, K, K);
-                    sync::wait_tensor();
+                    sync::wait_tdm();
                     if (laneid() == 0) sync::async_barrier_arrive(&B_bar[nxt].state);
                 }
             }
