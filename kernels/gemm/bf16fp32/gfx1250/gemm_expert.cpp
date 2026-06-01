@@ -2,13 +2,13 @@
  * @file gemm_expert.cpp
  * @brief Rung 7 -- expert-scheduled bf16 -> fp32 GEMM.
  *
- * Diff vs `gemm_segment`: enable expert SCHED_MODE for the K-loop scope via
- * `kittens::sched::expert_scope` (RAII), which writes
- * `s_setreg_b32 hwreg(26, 0, 2), 1` on entry and `..., 0` on exit -- matching
- * the recipe AMD's Tensile MXFP8 GEMM kernels use around their main loops.
- * The matrix-unit operand reuse cache is already engaged by `mma_ABt`'s
- * m-outer/n-inner zigzag traversal (B-reuse within each column, A-reuse on
- * column switches via zigzag).
+ * Diff vs `gemm_segment`: enable expert scheduling for the K-loop scope via
+ * `kittens::sched::expert_scope` (RAII) (see `set_expert`). 
+ * Because expert mode turns off that interlock, the loop
+ * inserts an explicit `kittens::sched::wait_alu()` before reloading the
+ * register tiles the previous matrix multiply read. The matrix-unit operand reuse cache is
+ * already engaged by `mma_ABt`'s m-outer/n-inner zigzag traversal (B-reuse
+ * within each column, A-reuse on column switches via zigzag).
  */
 
 #include "common.h"
@@ -39,8 +39,6 @@ void gemm_expert_kernel(const gemm_globals g, int M, int N, int K)
     const int warp_c  = wid % WARPS_N;
     const int k_iters = K / K_STEP;
 
-    kittens::sched::expert_scope _sched;  // expert mode in scope, restored on dtor
-
     kittens::g2s::load_async<Pad, BLOCK_M, K_STEP, NUM_THREADS>(
         A_lds[0], g.a, {0, 0, tile_m, 0}, K);
     kittens::g2s::load_async<Pad, BLOCK_N, K_STEP, NUM_THREADS>(
@@ -48,29 +46,39 @@ void gemm_expert_kernel(const gemm_globals g, int M, int N, int K)
     kittens::sync::wait_async();
     kittens::sync::arrive(); kittens::sync::wait();
 
-    for (int k = 0; k < k_iters; ++k) {
-        const int cur = k & 1, nxt = 1 - cur;
+    {
+        // Expert scheduling covers the K-loop only; restored before the
+        // epilogue store so the store's hazards are hardware-handled as usual.
+        kittens::sched::expert_scope _sched;
 
-        if (k + 1 < k_iters) {
-            kittens::g2s::load_async<Pad, BLOCK_M, K_STEP, NUM_THREADS>(
-                A_lds[nxt], g.a, {0, 0, tile_m, k + 1}, K);
-            kittens::g2s::load_async<Pad, BLOCK_N, K_STEP, NUM_THREADS>(
-                B_lds[nxt], g.b, {0, 0, tile_n, k + 1}, K);
+        for (int k = 0; k < k_iters; ++k) {
+            const int cur = k & 1, nxt = 1 - cur;
+
+            if (k + 1 < k_iters) {
+                kittens::g2s::load_async<Pad, BLOCK_M, K_STEP, NUM_THREADS>(
+                    A_lds[nxt], g.a, {0, 0, tile_m, k + 1}, K);
+                kittens::g2s::load_async<Pad, BLOCK_N, K_STEP, NUM_THREADS>(
+                    B_lds[nxt], g.b, {0, 0, tile_n, k + 1}, K);
+            }
+            kittens::sync::arrive();
+
+            // A_reg/B_reg are reused every iteration: the previous mma must
+            // finish reading them before these loads overwrite them.
+            kittens::sched::wait_alu();
+
+            rt_bf<WARP_M, K_STEP, row_l, rt_16x32_s> A_reg;
+            rt_bf<WARP_N, K_STEP, row_l, rt_16x32_s> B_reg;
+            kittens::load_b128<Pad, WARP_M, K_STEP>(
+                A_reg, A_lds[cur] + Pad::padded(warp_r * WARP_M * K_STEP));
+            kittens::load_b128<Pad, WARP_N, K_STEP>(
+                B_reg, B_lds[cur] + Pad::padded(warp_c * WARP_N * K_STEP));
+
+            kittens::sync::wait();
+            kittens::sync::wait_ds();
+            mma_ABt(C_acc, A_reg, B_reg, C_acc);
+
+            kittens::sync::wait_async();
         }
-        kittens::sync::arrive();
-
-        rt_bf<WARP_M, K_STEP, row_l, rt_16x32_s> A_reg;
-        rt_bf<WARP_N, K_STEP, row_l, rt_16x32_s> B_reg;
-        kittens::load_b128<Pad, WARP_M, K_STEP>(
-            A_reg, A_lds[cur] + Pad::padded(warp_r * WARP_M * K_STEP));
-        kittens::load_b128<Pad, WARP_N, K_STEP>(
-            B_reg, B_lds[cur] + Pad::padded(warp_c * WARP_N * K_STEP));
-
-        kittens::sync::wait();
-        kittens::sync::wait_ds();
-        mma_ABt(C_acc, A_reg, B_reg, C_acc);
-
-        kittens::sync::wait_async();
     }
 
     bf16* c_base = reinterpret_cast<bf16*>(&g.c[{0, 0, 0, 0}]);

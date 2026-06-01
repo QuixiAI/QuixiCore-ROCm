@@ -13,7 +13,7 @@
  *      overlap is the key enabler for tight producer/consumer GEMM loops.
  *      In exchange, the kernel author becomes responsible for inserting an
  *      explicit wait (`wait_alu`) wherever a later instruction really does
- *      depend on a math result. See `set_expert`, `expert_scope`,
+ *      depend on an earlier one. See `set_expert`, `expert_scope`,
  *      `claim_simd`.
  *   2. **Wave priority** -- a hint that breaks ties when several waves on
  *      the same SIMD want to issue in the same cycle; the higher-priority
@@ -57,7 +57,7 @@ constexpr int SCHED_MODE_CLAIM_SIMD_SIMM16 = 26 | (4 << 6) | (0 << 11);  // back
  * Caller responsibility once expert mode is on: any time a later
  * instruction genuinely needs the result of a math instruction (anything
  * the wave computes on its vector lanes -- ordinary arithmetic and matrix
- * multiplies / WMMA alike), insert an explicit `kittens::sched::wait_alu<>()`
+ * multiplies / WMMA alike), insert an explicit `kittens::sched::wait_alu()`
  * before that consumer. With expert mode off the hardware inserts this wait
  * for you; with it on, you do.
  *
@@ -65,8 +65,13 @@ constexpr int SCHED_MODE_CLAIM_SIMD_SIMM16 = 26 | (4 << 6) | (0 << 11);  // back
  * does both at the start and end of a scope.
  */
 __device__ __forceinline__ void set_expert(bool on) {
+    // Value 2 selects the scheduling mode that lifts *only* the memory<->math
+    // overlap interlock these loops rely on, so a single `wait_alu()` at each
+    // genuine dependency is the complete fix. (The more aggressive value 1
+    // also lifts the scalar-side interlocks, which clang-generated scalar code
+    // in these kernels cannot safely take responsibility for.)
     __builtin_amdgcn_s_setreg(detail::SCHED_MODE_EXPERT_SIMM16,
-                              on ? 1u : 0u);
+                              on ? 2u : 0u);
 }
 
 /**
@@ -120,31 +125,31 @@ __device__ __forceinline__ void claim_simd() {
 }
 
 /**
- * @brief Wait until this wave's outstanding math results are ready.
+ * @brief Resolve this wave's outstanding ALU dependencies by hand
+ *        (needed only under expert mode).
  *
- * "Math" here means anything the wave computes on its vector lanes --
- * ordinary arithmetic and matrix multiplies / WMMA. Lowers to
- * `s_wait_alu <BITS>`, where `BITS` selects which dependency counters to
- * wait on (e.g. outstanding scalar-register writes vs. vector-register
- * writes); see the AMD ISA assembler reference for the named `depctr_*`
- * constants.
+ * Drains both dependency counters that expert scheduling stops the hardware
+ * from checking for you:
+ *   - outstanding vector/matrix (WMMA) result writebacks, so a later
+ *     instruction may read those results or reuse the registers they consumed;
+ *   - outstanding load/store source-register reads, so those registers may be
+ *     safely overwritten.
+ * Once it returns, both are complete. The common case in a GEMM K-loop is
+ * reusing a register tile a matrix multiply read: call this before loading the
+ * next K-tile into the same registers the previous multiply consumed.
  *
- * **Why you need it under expert mode**: with expert scheduling on, the
- * hardware no longer auto-inserts the wait between a math instruction and a
- * later instruction that consumes its result. Insert `wait_alu` yourself
- * wherever such a dependency exists. (With expert mode off it is never
- * needed.)
+ * With expert scheduling off the hardware inserts these waits for you, so this
+ * is never needed. Note it does *not* wait for loaded data to *arrive* -- that
+ * is a memory-count wait (`sync::wait_load`, `wait_ds`, `wait_async`, ...),
+ * which expert mode does not affect.
  *
- * @note Clang 23 does not expose `__builtin_amdgcn_s_wait_alu`; we emit
- *       the instruction directly with `BITS` as an immediate operand.
- *       Same convention as `sync::wait_load` / `wait_ds` / etc.
- *
- * @tparam BITS  Dependency mask (see AMD ISA assembler reference for the
- *               named `depctr_*` constants and their encodings).
+ * @note Clang 23 does not expose `__builtin_amdgcn_s_wait_alu`; we emit the
+ *       instructions directly. Lowers to `s_wait_alu depctr_va_vdst(0)` then
+ *       `s_wait_alu depctr_vm_vsrc(0)`.
  */
-template<int BITS>
 __device__ __forceinline__ void wait_alu() {
-    asm volatile("s_wait_alu %0" :: "i"(BITS) : "memory");
+    asm volatile("s_wait_alu depctr_va_vdst(0)" ::: "memory");
+    asm volatile("s_wait_alu depctr_vm_vsrc(0)" ::: "memory");
 }
 
 /**

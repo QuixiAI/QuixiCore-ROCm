@@ -81,8 +81,6 @@ void gemm_tdm_arrive_kernel(const gemm_globals g, int M, int N, int K)
     }
     sync::sync();
 
-    sched::expert_scope _sched;
-
     // Per-buffer parity bits. The cell's phase bit starts at 0 and flips
     // each time the pending count drains; `wait_barrier(.., phase ^ 1)`
     // unblocks once the next arrival lands.
@@ -112,43 +110,53 @@ void gemm_tdm_arrive_kernel(const gemm_globals g, int M, int N, int K)
         if (laneid() == 0) sync::async_barrier_arrive(&B_bar[0].state);
     }
 
-    for (int k = 0; k < k_iters; ++k) {
-        const int cur = k & 1, nxt = 1 - cur;
+    {
+        // Expert scheduling covers the K-loop only; restored before the
+        // epilogue store so the store's hazards are hardware-handled as usual.
+        sched::expert_scope _sched;
 
-        if (k + 1 < k_iters) {
-            if (wid == 0) {
-                g2s::load_tdm<Pad, BLOCK_M, K_STEP>(
-                    A_lds[nxt], g.a, {0, 0, tile_m, k + 1}, M, K, K);
-                sync::wait_tensor();
-                if (laneid() == 0) sync::async_barrier_arrive(&A_bar[nxt].state);
+        for (int k = 0; k < k_iters; ++k) {
+            const int cur = k & 1, nxt = 1 - cur;
+
+            if (k + 1 < k_iters) {
+                if (wid == 0) {
+                    g2s::load_tdm<Pad, BLOCK_M, K_STEP>(
+                        A_lds[nxt], g.a, {0, 0, tile_m, k + 1}, M, K, K);
+                    sync::wait_tensor();
+                    if (laneid() == 0) sync::async_barrier_arrive(&A_bar[nxt].state);
+                }
+                if (wid == 1) {
+                    g2s::load_tdm<Pad, BLOCK_N, K_STEP>(
+                        B_lds[nxt], g.b, {0, 0, tile_n, k + 1}, N, K, K);
+                    sync::wait_tensor();
+                    if (laneid() == 0) sync::async_barrier_arrive(&B_bar[nxt].state);
+                }
             }
-            if (wid == 1) {
-                g2s::load_tdm<Pad, BLOCK_N, K_STEP>(
-                    B_lds[nxt], g.b, {0, 0, tile_n, k + 1}, N, K, K);
-                sync::wait_tensor();
-                if (laneid() == 0) sync::async_barrier_arrive(&B_bar[nxt].state);
-            }
+
+            // Wait for THIS K-step's transfers (independent of the next).
+            // Toggle the parity for the cell we're about to consume.
+            A_phase[cur] ^= 1;
+            B_phase[cur] ^= 1;
+            sync::wait_barrier(&A_bar[cur].state, A_phase[cur]);
+            sync::wait_barrier(&B_bar[cur].state, B_phase[cur]);
+            sync::sync();   // make A/B-arrived state visible to every consumer warp
+
+            // A_reg/B_reg are reused every iteration: the previous mma must
+            // finish reading them before these loads overwrite them.
+            sched::wait_alu();
+
+            rt_bf<WARP_M, K_STEP, row_l, rt_16x32_s> A_reg;
+            rt_bf<WARP_N, K_STEP, row_l, rt_16x32_s> B_reg;
+            kittens::load_b128<Pad, WARP_M, K_STEP>(
+                A_reg, A_lds[cur] + Pad::padded(warp_r * WARP_M * K_STEP));
+            kittens::load_b128<Pad, WARP_N, K_STEP>(
+                B_reg, B_lds[cur] + Pad::padded(warp_c * WARP_N * K_STEP));
+
+            sync::wait_ds();
+            mma_ABt(C_acc, A_reg, B_reg, C_acc);
+
+            sync::sync();
         }
-
-        // Wait for THIS K-step's transfers (independent of the next).
-        // Toggle the parity for the cell we're about to consume.
-        A_phase[cur] ^= 1;
-        B_phase[cur] ^= 1;
-        sync::wait_barrier(&A_bar[cur].state, A_phase[cur]);
-        sync::wait_barrier(&B_bar[cur].state, B_phase[cur]);
-        sync::sync();   // make A/B-arrived state visible to every consumer warp
-
-        rt_bf<WARP_M, K_STEP, row_l, rt_16x32_s> A_reg;
-        rt_bf<WARP_N, K_STEP, row_l, rt_16x32_s> B_reg;
-        kittens::load_b128<Pad, WARP_M, K_STEP>(
-            A_reg, A_lds[cur] + Pad::padded(warp_r * WARP_M * K_STEP));
-        kittens::load_b128<Pad, WARP_N, K_STEP>(
-            B_reg, B_lds[cur] + Pad::padded(warp_c * WARP_N * K_STEP));
-
-        sync::wait_ds();
-        mma_ABt(C_acc, A_reg, B_reg, C_acc);
-
-        sync::sync();
     }
 
     bf16* c_base = reinterpret_cast<bf16*>(&g.c[{0, 0, 0, 0}]);
