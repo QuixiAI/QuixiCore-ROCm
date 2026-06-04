@@ -416,7 +416,7 @@ __device__ static inline void store(const GL &dst, const ST &src, const COORD &i
     store<2, false, ST, GL, COORD, WARP_THREADS>(dst, src, idx);
 }
 
-/* ========================================================================== *
+/**
  * gfx1250 raw-pointer global <-> LDS transfers
  *
  * Three hardware paths move a global tile into LDS, all landing straight in
@@ -443,16 +443,24 @@ __device__ static inline void store(const GL &dst, const ST &src, const COORD &i
  *
  * Lives in `kittens::g2s::` to avoid colliding with the CDNA `load(ST&, ...)`
  * overloads in the parent `kittens::` namespace.
- * ========================================================================== */
+ *
+ */
 #ifdef KITTENS_UDNA1
 
 /**
  * @brief Compile-time LDS padding descriptor for gfx1250.
  *
- * Encodes the "insert `AMOUNT` pad elements every `INTERVAL` elements" rule
- * used to break bank-conflict hotspots on gfx1250 LDS. The defaults
- * (interval = 128 bf16 = 256 B, amount = 8 bf16 = 16 B) match the
- * recommended layout for 16-bit operands.
+ * gfx1250 LDS is banked as 64 banks x 4 B (one 32-bit column per bank);
+ * threads in a wave conflict when two address the same bank in the same
+ * cycle, and the hardware serializes them.
+ *
+ * This descriptor encodes the "insert `AMOUNT` pad elements every `INTERVAL`
+ * elements" rule, which perturbs the row stride so a strided (column /
+ * transposed) access spreads across distinct banks instead of hitting one
+ * repeatedly. The defaults (`INTERVAL` = 128 bf16 = 256 B, `AMOUNT` = 8 
+ * bf16 = 16 B) are the recommended 16-bit layout and the measured 
+ * conflict-free point for the bf16 GEMM tiles.
+ *
  */
 template<int INTERVAL = 128, int AMOUNT = 8>
 struct lds_padded {
