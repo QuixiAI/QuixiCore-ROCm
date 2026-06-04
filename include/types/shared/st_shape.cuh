@@ -263,6 +263,12 @@ struct st_16x32_nosz {
         const int r = coord.x, c = coord.y;
         return sizeof(_T) * (r * cols + c);
     }
+
+    // Padding interface consumed by `st_pad` (no padding for the flat layout).
+    static constexpr int pad_interval = 0;
+    static constexpr int pad_amount   = 0;
+    __device__ __host__ __forceinline__ static constexpr int padded(int flat) { return flat; }
+    static constexpr int storage_elems(int total) { return total; }
 };
 
 /**
@@ -307,6 +313,12 @@ struct st_16x32_padded {
     static constexpr int padded_elems(int total_elems) {
         return total_elems + (total_elems / PAD_INTERVAL) * PAD_AMOUNT;
     }
+
+    // Padding interface consumed by `st_pad`.
+    __device__ __host__ __forceinline__ static constexpr int padded(int flat) {
+        return flat + (flat / PAD_INTERVAL) * PAD_AMOUNT;
+    }
+    static constexpr int storage_elems(int total_elems) { return padded_elems(total_elems); }
 };
 
 template<typename T>

@@ -28,6 +28,15 @@ constexpr int NUM_THREADS = NUM_WARPS * kittens::WARP_THREADS;
 
 using gl_bf = kittens::gl<kittens::bf16, -1, -1, -1, -1>;
 
+/* ----------  SHARED TILE TYPES  ---------- */
+// gfx1250 shared tiles own their LDS storage size and the subtile-major +
+// padding address map (see `st_pad`). Padded rungs use the bank-conflict-
+// avoiding layout; the naive/flat rungs use the unpadded layout.
+using A_tile_pad  = kittens::st_pad_padded_bf<BLOCK_M, K_STEP>;
+using B_tile_pad  = kittens::st_pad_padded_bf<BLOCK_N, K_STEP>;
+using A_tile_flat = kittens::st_pad_flat_bf<BLOCK_M, K_STEP>;
+using B_tile_flat = kittens::st_pad_flat_bf<BLOCK_N, K_STEP>;
+
 /* ----------  GLOBALS  ---------- */
 
 struct gemm_globals {

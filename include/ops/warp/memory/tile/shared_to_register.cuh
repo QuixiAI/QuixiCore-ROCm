@@ -693,8 +693,8 @@ __device__ inline static void store(ST &dst, const RT &src) {
  *
  * Two flavors:
  *  - `load_b128`  : wide `ds_load_b128` per lane, two loads per 16x32 subtile.
- *                   Honors a `Pad` descriptor so kernels can use padded LDS
- *                   layouts without writing offset math.
+ *                   Reads through the source `st_pad` tile, which owns the
+ *                   subtile-major + padding LDS offset math.
  *  - `load_b32`   : narrow `ds_load_b32` per lane (correctness baseline; used
  *                   for the un-optimized naive rung of the GEMM ladder).
  *
@@ -704,51 +704,49 @@ __device__ inline static void store(ST &dst, const RT &src) {
  * ========================================================================== */
 #ifdef KITTENS_UDNA1
 
-namespace detail {
-/// @brief Subtile geometry constants -- must match `subtile_flat` in g2s helpers.
-inline constexpr int GFX1250_SUB_ROWS  = 16;
-inline constexpr int GFX1250_SUB_COLS  = 32;
-inline constexpr int GFX1250_SUB_ELEMS = GFX1250_SUB_ROWS * GFX1250_SUB_COLS;
-} // namespace detail
-
 /**
  * @brief Wide (`ds_load_b128`) shared -> register load for gfx1250.
  *
  * Each lane issues two `ds_load_b128` instructions per 16x32 subtile,
  * filling the 16 `bf16` elements per lane required by the WMMA bf16 operand
- * layout. The `Pad` descriptor controls LDS placement; pass `lds_nopad` for
- * flat tiles and `lds_pad_default` (or any `lds_padded<I,A>`) for padded.
+ * layout.
  *
- * @tparam Pad    Padding descriptor (`lds_nopad` or `lds_padded<...>`).
  * @tparam WARP_M, WARP_K   Per-warp tile dimensions (must be multiples of 16/32).
- * @param dst            Destination register tile.
- * @param warp_lds_base  Pointer into LDS at the warp's tile origin.
+ * @param dst              Destination register tile.
+ * @param src              Source shared tile (`st_pad`).
+ * @param warp_origin_flat Row-major flat index of the warp's tile origin in
+ *                         `src` (subtile-aligned; the type applies padding).
  */
-template<typename Pad, int WARP_M, int WARP_K>
+template<int WARP_M, int WARP_K, typename T, int R, int C, ducks::st_shape::all Shape>
 __device__ inline void load_b128(
     rt_bf<WARP_M, WARP_K, ducks::rt_layout::row, ducks::rt_shape::rt_16x32>& dst,
-    const bf16* __restrict__ warp_lds_base)
+    const st_pad<T, R, C, Shape>& src, int warp_origin_flat)
 {
-    constexpr int height       = WARP_M / detail::GFX1250_SUB_ROWS;
-    constexpr int width        = WARP_K / detail::GFX1250_SUB_COLS;
-    constexpr int subs_per_row = WARP_K / detail::GFX1250_SUB_COLS;
+    constexpr int sub_rows     = Shape::rows;
+    constexpr int sub_cols     = Shape::cols;
+    constexpr int sub_elems    = sub_rows * sub_cols;
+    constexpr int height       = WARP_M / sub_rows;
+    constexpr int width        = WARP_K / sub_cols;
+    constexpr int subs_per_row = WARP_K / sub_cols;
+    constexpr int half_cols    = sub_cols / 2;
 
     const int L    = kittens::laneid();
-    const int row  = L % 16;
-    const int half = L / 16;
+    const int row  = L % sub_rows;
+    const int half = L / sub_rows;
 
     #pragma unroll
     for (int ti = 0; ti < height; ti++) {
         #pragma unroll
         for (int tj = 0; tj < width; tj++) {
             const int sub_id     = ti * subs_per_row + tj;
-            const int base_flat  = sub_id * detail::GFX1250_SUB_ELEMS
-                                 + row * detail::GFX1250_SUB_COLS
-                                 + half * 16;
-            const int padded_off = Pad::padded(base_flat);
+            const int base_flat  = warp_origin_flat
+                                 + sub_id * sub_elems
+                                 + row * sub_cols
+                                 + half * half_cols;
+            const int padded_off = src.padded(base_flat);
 
             const uint32_t addr = static_cast<uint32_t>(
-                reinterpret_cast<uintptr_t>(warp_lds_base + padded_off));
+                reinterpret_cast<uintptr_t>(src.data + padded_off));
 
             float4 lo, hi;
             asm volatile("ds_load_b128 %0, %1 offset:0\n"
@@ -774,34 +772,39 @@ __device__ inline void load_b128(
 /**
  * @brief Narrow (`ds_load_b32`) shared -> register load for gfx1250 -- correctness baseline.
  *
- * Each lane reads 16 bf16 elements as 8 b32 packed pairs from the flat LDS
- * layout (no padding). Useful for the naive rung of the ladder and as a
- * fallback when the wide `b128` path can't satisfy alignment constraints.
+ * Each lane reads 16 bf16 elements as 8 b32 packed pairs through the source
+ * `st_pad` tile's address map. Useful for the naive rung of the ladder and as
+ * a fallback when the wide `b128` path can't satisfy alignment constraints.
  */
-template<int WARP_M, int WARP_K>
+template<int WARP_M, int WARP_K, typename T, int R, int C, ducks::st_shape::all Shape>
 __device__ inline void load_b32(
     rt_bf<WARP_M, WARP_K, ducks::rt_layout::row, ducks::rt_shape::rt_16x32>& dst,
-    const bf16* __restrict__ warp_lds_base)
+    const st_pad<T, R, C, Shape>& src, int warp_origin_flat)
 {
-    constexpr int height       = WARP_M / detail::GFX1250_SUB_ROWS;
-    constexpr int width        = WARP_K / detail::GFX1250_SUB_COLS;
-    constexpr int subs_per_row = WARP_K / detail::GFX1250_SUB_COLS;
+    constexpr int sub_rows     = Shape::rows;
+    constexpr int sub_cols     = Shape::cols;
+    constexpr int sub_elems    = sub_rows * sub_cols;
+    constexpr int height       = WARP_M / sub_rows;
+    constexpr int width        = WARP_K / sub_cols;
+    constexpr int subs_per_row = WARP_K / sub_cols;
+    constexpr int half_cols    = sub_cols / 2;
 
     const int L    = kittens::laneid();
-    const int row  = L % 16;
-    const int half = L / 16;
+    const int row  = L % sub_rows;
+    const int half = L / sub_rows;
 
     #pragma unroll
     for (int ti = 0; ti < height; ti++) {
         #pragma unroll
         for (int tj = 0; tj < width; tj++) {
             const int sub_id    = ti * subs_per_row + tj;
-            const int base_flat = sub_id * detail::GFX1250_SUB_ELEMS
-                                + row * detail::GFX1250_SUB_COLS
-                                + half * 16;
+            const int base_flat = warp_origin_flat
+                                + sub_id * sub_elems
+                                + row * sub_cols
+                                + half * half_cols;
 
             const bf16_2* lds_p = reinterpret_cast<const bf16_2*>(
-                warp_lds_base + base_flat);
+                src.data + src.padded(base_flat));
 
             #pragma unroll
             for (int k = 0; k < 8; k++) {

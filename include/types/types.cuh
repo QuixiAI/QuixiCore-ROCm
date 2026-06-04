@@ -82,6 +82,11 @@ using st_16x128_s = ducks::st_shape::st_16x128;
 using st_16x32_nosz_s    = ducks::st_shape::st_16x32_nosz;
 template<int I=128, int A=8>
 using st_16x32_padded_s  = ducks::st_shape::st_16x32_padded<I, A>;
+
+// gfx1250 padded shared tiles -- storage size + LDS address map owned by the shape.
+// `st_pad_padded_bf` carries bank-conflict padding; `st_pad_flat_bf` is unpadded.
+template<int R, int C> using st_pad_padded_bf = st_pad_bf<R, C, ducks::st_shape::st_16x32_padded<>>;
+template<int R, int C> using st_pad_flat_bf   = st_pad_bf<R, C, ducks::st_shape::st_16x32_nosz>;
 #endif
 
 }

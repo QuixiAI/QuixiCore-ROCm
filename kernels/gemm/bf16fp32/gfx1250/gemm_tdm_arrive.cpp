@@ -42,10 +42,6 @@
 using namespace kittens;
 using namespace gfx1250_gemm;
 
-using Pad = lds_pad_default;
-constexpr int A_ELEMS_PAD = Pad::padded_elems(BLOCK_M * K_STEP);
-constexpr int B_ELEMS_PAD = Pad::padded_elems(BLOCK_N * K_STEP);
-
 __global__ __launch_bounds__(NUM_THREADS, 1)
 void gemm_tdm_arrive_kernel(const gemm_globals g, int M, int N, int K)
 {
@@ -58,8 +54,8 @@ void gemm_tdm_arrive_kernel(const gemm_globals g, int M, int N, int K)
     // the A buffers; finally B in segment 1.
     sync::barrier_lds(&A_bar)[2] = al.allocate_in<segment<0>, sync::barrier_lds, 2>();
     sync::barrier_lds(&B_bar)[2] = al.allocate_in<segment<0>, sync::barrier_lds, 2>();
-    bf16(&A_lds)[2][A_ELEMS_PAD] = al.allocate_in<segment<0>, bf16, 2, A_ELEMS_PAD>();
-    bf16(&B_lds)[2][B_ELEMS_PAD] = al.allocate_in<segment<1>, bf16, 2, B_ELEMS_PAD>();
+    A_tile_pad(&A_st)[2] = al.allocate_in<segment<0>, A_tile_pad, 2>();
+    B_tile_pad(&B_st)[2] = al.allocate_in<segment<1>, B_tile_pad, 2>();
 
     rt_fl<WARP_M, WARP_N, col_l, rt_16x16_s> C_acc;
     zero(C_acc);
@@ -98,14 +94,12 @@ void gemm_tdm_arrive_kernel(const gemm_globals g, int M, int N, int K)
     // guard with `laneid() == 0` so each producer wave arrives exactly
     // once per phase (matching the `init_barrier(.., 1)` priming above).
     if (wid == 0) {
-        g2s::load_tdm<Pad, BLOCK_M, K_STEP>(
-            A_lds[0], g.a, {0, 0, tile_m, 0}, M, K, K);
+        load_tdm(A_st[0], g.a, {0, 0, tile_m, 0}, M, K, K);
         sync::wait_tdm();
         if (laneid() == 0) sync::async_barrier_arrive(&A_bar[0].state);
     }
     if (wid == 1) {
-        g2s::load_tdm<Pad, BLOCK_N, K_STEP>(
-            B_lds[0], g.b, {0, 0, tile_n, 0}, N, K, K);
+        load_tdm(B_st[0], g.b, {0, 0, tile_n, 0}, N, K, K);
         sync::wait_tdm();
         if (laneid() == 0) sync::async_barrier_arrive(&B_bar[0].state);
     }
@@ -120,14 +114,12 @@ void gemm_tdm_arrive_kernel(const gemm_globals g, int M, int N, int K)
 
             if (k + 1 < k_iters) {
                 if (wid == 0) {
-                    g2s::load_tdm<Pad, BLOCK_M, K_STEP>(
-                        A_lds[nxt], g.a, {0, 0, tile_m, k + 1}, M, K, K);
+                    load_tdm(A_st[nxt], g.a, {0, 0, tile_m, k + 1}, M, K, K);
                     sync::wait_tdm();
                     if (laneid() == 0) sync::async_barrier_arrive(&A_bar[nxt].state);
                 }
                 if (wid == 1) {
-                    g2s::load_tdm<Pad, BLOCK_N, K_STEP>(
-                        B_lds[nxt], g.b, {0, 0, tile_n, k + 1}, N, K, K);
+                    load_tdm(B_st[nxt], g.b, {0, 0, tile_n, k + 1}, N, K, K);
                     sync::wait_tdm();
                     if (laneid() == 0) sync::async_barrier_arrive(&B_bar[nxt].state);
                 }
@@ -147,10 +139,8 @@ void gemm_tdm_arrive_kernel(const gemm_globals g, int M, int N, int K)
 
             rt_bf<WARP_M, K_STEP, row_l, rt_16x32_s> A_reg;
             rt_bf<WARP_N, K_STEP, row_l, rt_16x32_s> B_reg;
-            kittens::load_b128<Pad, WARP_M, K_STEP>(
-                A_reg, A_lds[cur] + Pad::padded(warp_r * WARP_M * K_STEP));
-            kittens::load_b128<Pad, WARP_N, K_STEP>(
-                B_reg, B_lds[cur] + Pad::padded(warp_c * WARP_N * K_STEP));
+            kittens::load_b128<WARP_M, K_STEP>(A_reg, A_st[cur], warp_r * WARP_M * K_STEP);
+            kittens::load_b128<WARP_N, K_STEP>(B_reg, B_st[cur], warp_c * WARP_N * K_STEP);
 
             sync::wait_ds();
             mma_ABt(C_acc, A_reg, B_reg, C_acc);
@@ -172,7 +162,7 @@ void dispatch(gemm_globals g)
     // Same layout as `gemm_segment`/`gemm_expert` (A in seg 0, B in seg 1)
     // plus 4 barrier cells in seg 0.
     constexpr size_t bar_bytes = 4 * sizeof(sync::barrier_lds);
-    const size_t mem_size = LDS_SEGMENT_BYTES + 2 * B_ELEMS_PAD * sizeof(bf16);
+    const size_t mem_size = LDS_SEGMENT_BYTES + 2 * sizeof(B_tile_pad);
     (void)bar_bytes;
     hipFuncSetAttribute(reinterpret_cast<const void*>(gemm_tdm_arrive_kernel),
                         hipFuncAttributeMaxDynamicSharedMemorySize,

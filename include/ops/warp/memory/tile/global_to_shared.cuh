@@ -435,101 +435,27 @@ __device__ static inline void store(const GL &dst, const ST &src, const COORD &i
  *     moves a WHOLE tile per instruction from an SGPR descriptor 
  *     and does its own address generation. Drained with `wait_tdm`.
  *
- * The async builtins take raw 16B-aligned LDS pointers. Padded LDS layouts
- * complicate offset math, so the gfx1250 path takes raw `T*` LDS slabs plus a
- * compile-time padding descriptor. Kernels allocate the slab via
- * `shared_allocator::allocate_in<segment<I>>` and call these helpers to
- * populate it.
- *
- * Lives in `kittens::g2s::` to avoid colliding with the CDNA `load(ST&, ...)`
- * overloads in the parent `kittens::` namespace.
+ * These ops dispatch through a gfx1250 shared-tile type (`st_pad`) that owns
+ * its padded LDS storage and address map, mirroring the canonical
+ * `load(tile, gl, idx)` surface -- no separate padding descriptor. Kernels
+ * allocate an `st_pad`/`st_pad_bf` tile (optionally via
+ * `shared_allocator::allocate_in<segment<I>>`) and pass it straight in.
  *
  */
 #ifdef KITTENS_UDNA1
 
 /**
- * @brief Compile-time LDS padding descriptor for gfx1250.
- *
- * gfx1250 LDS is banked as 64 banks x 4 B (one 32-bit column per bank);
- * threads in a wave conflict when two address the same bank in the same
- * cycle, and the hardware serializes them.
- *
- * This descriptor encodes the "insert `AMOUNT` pad elements every `INTERVAL`
- * elements" rule, which perturbs the row stride so a strided (column /
- * transposed) access spreads across distinct banks instead of hitting one
- * repeatedly. The defaults (`INTERVAL` = 128 bf16 = 256 B, `AMOUNT` = 8 
- * bf16 = 16 B) are the recommended 16-bit layout and the measured 
- * conflict-free point for the bf16 GEMM tiles.
- *
- */
-template<int INTERVAL = 128, int AMOUNT = 8>
-struct lds_padded {
-    static constexpr int interval = INTERVAL;
-    static constexpr int amount   = AMOUNT;
-    __device__ __host__ __forceinline__ static constexpr int padded(int flat) {
-        return flat + (flat / INTERVAL) * AMOUNT;
-    }
-    static constexpr int padded_elems(int total) {
-        return total + (total / INTERVAL) * AMOUNT;
-    }
-};
-
-/// @brief Padding descriptor for unpadded LDS layouts.
-struct lds_nopad {
-    static constexpr int interval = 0;
-    static constexpr int amount   = 0;
-    __device__ __host__ __forceinline__ static constexpr int padded(int flat) { return flat; }
-    static constexpr int padded_elems(int total) { return total; }
-};
-
-/// @brief Default LDS padding for bf16 GEMMs on gfx1250.
-using lds_pad_default = lds_padded<128, 8>;
-
-namespace g2s {
-namespace detail {
-/// @brief 16B (`int4`) vector types tagged with the address spaces the
-///        gfx1250 `*_load_async_to_lds_b128` builtins require.
-using i32x4_vec   = int __attribute__((__vector_size__(16)));
-using i32x4_gvec  = int __attribute__((__vector_size__(16))) __attribute__((address_space(1)));
-using i32x4_lvec  = int __attribute__((__vector_size__(16))) __attribute__((address_space(3)));
-
-/**
- * @brief Subtile-major flat index helper for gfx1250 LDS layouts.
- *
- * Mirrors the indexing used by `ops/warp/memory/tile/shared_to_register.cuh`
- * gfx1250 path: rows/cols within a subtile are stored row-major, subtiles are
- * laid out row-major across the tile.
- */
-template<int ROWS, int COLS, int SUB_ROWS, int SUB_COLS>
-__device__ __forceinline__ int subtile_flat(int flat) {
-    constexpr int sub_elems    = SUB_ROWS * SUB_COLS;
-    constexpr int subs_per_row = COLS / SUB_COLS;
-    const int subtile_id = flat / sub_elems;
-    const int local_idx  = flat % sub_elems;
-    const int local_row  = local_idx / SUB_COLS;
-    const int local_col  = local_idx % SUB_COLS;
-    const int sub_r      = subtile_id / subs_per_row;
-    const int sub_c      = subtile_id % subs_per_row;
-    return sub_r * SUB_ROWS * COLS
-         + sub_c * SUB_COLS
-         + local_row * COLS
-         + local_col;
-}
-} // namespace detail (g2s)
-
-/**
  * @brief Cooperative register-mediated global -> LDS tile copy (gfx1250 baseline).
  *
  * Plain `global_load` -> VGPR -> `ds_store` path. Use this when no async
- * intrinsic is available or for correctness baselines. The `Pad` parameter
- * controls the per-element LDS placement; pass `lds_nopad` for flat layouts.
+ * intrinsic is available or for correctness baselines. The destination
+ * `st_pad` tile owns the subtile-major + padding LDS address map.
  */
-template<typename Pad = lds_nopad, int ROWS = 0, int COLS = 0, int N_THREADS = WARP_THREADS,
-         typename T, ducks::gl::all GL, ducks::coord::tile COORD = coord<>>
-__device__ inline void load(T* __restrict__ lds_dst, const GL& src, const COORD& idx,
-                            int row_stride)
+template<int N_THREADS = WARP_THREADS, typename T, int ROWS, int COLS,
+         ducks::st_shape::all Shape, ducks::gl::all GL, ducks::coord::tile COORD = coord<>>
+__device__ inline void load(st_pad<T, ROWS, COLS, Shape>& dst, const GL& src,
+                            const COORD& idx, int row_stride)
 {
-    static_assert(ROWS > 0 && COLS > 0, "ROWS and COLS must be specified");
     constexpr int total_elems = ROWS * COLS;
     const int tid = threadIdx.x;
     // The COORD is interpreted as tile-index coordinates `{b, d, tile_row, tile_col}`
@@ -544,9 +470,9 @@ __device__ inline void load(T* __restrict__ lds_dst, const GL& src, const COORD&
     for (int i = tid; i < total_elems; i += N_THREADS) {
         const int row = i / COLS;
         const int col = i % COLS;
-        // Subtile-major LDS layout (rows of 16x32 subtiles).
-        const int lds_flat = detail::subtile_flat<ROWS, COLS, 16, 32>(i);
-        lds_dst[Pad::padded(lds_flat)] = base[row * row_stride + col];
+        // st_pad maps the logical (row-major) index to its subtile-major,
+        // padded LDS slot.
+        dst.data[dst.lds_offset(i)] = base[row * row_stride + col];
     }
 }
 
@@ -558,21 +484,18 @@ __device__ inline void load(T* __restrict__ lds_dst, const GL& src, const COORD&
  * issues one 16-byte transfer; the warp covers `8 * N_THREADS` elements per
  * iteration. Drain with `kittens::sync::wait_async()` before consuming.
  *
- * @tparam Pad      LDS padding descriptor.
- * @tparam ROWS,COLS  Tile shape (elements).
- * @tparam N_THREADS  Number of threads participating in the load.
- * @param  lds_dst    16B-aligned LDS pointer (typically `bf16*`).
- * @param  src        Global tile descriptor.
- * @param  idx        Tile coordinate inside `src`.
- * @param  row_stride Element stride between rows in `src`.
+ * @tparam N_THREADS    Number of threads participating in the load.
+ * @param  dst          Destination `st_pad` tile (owns the padded LDS map).
+ * @param  src          Global tile descriptor.
+ * @param  idx          Tile coordinate inside `src`.
+ * @param  row_stride   Element stride between rows in `src`.
  * @param  cluster_mask `M0` cluster multicast mask (0 for single-WG, non-zero for a workgroup cluster).
  */
-template<typename Pad = lds_nopad, int ROWS = 0, int COLS = 0, int N_THREADS = WARP_THREADS,
-         typename T, ducks::gl::all GL, ducks::coord::tile COORD = coord<>>
-__device__ inline void load_async(T* __restrict__ lds_dst, const GL& src, const COORD& idx,
-                                  int row_stride, uint32_t cluster_mask = 0)
+template<int N_THREADS = WARP_THREADS, typename T, int ROWS, int COLS,
+         ducks::st_shape::all Shape, ducks::gl::all GL, ducks::coord::tile COORD = coord<>>
+__device__ inline void load_async(st_pad<T, ROWS, COLS, Shape>& dst, const GL& src,
+                                  const COORD& idx, int row_stride, uint32_t cluster_mask = 0)
 {
-    static_assert(ROWS > 0 && COLS > 0, "ROWS and COLS must be specified");
     static_assert(sizeof(T) * 8 == 16, "load_async issues one b128 (16B) per lane");
     constexpr int elems_per_load = 16 / sizeof(T);
     constexpr int total_elems    = ROWS * COLS;
@@ -589,14 +512,13 @@ __device__ inline void load_async(T* __restrict__ lds_dst, const GL& src, const 
     {
         const int row = i / COLS;
         const int col = i % COLS;
-        const int lds_flat = detail::subtile_flat<ROWS, COLS, 16, 32>(i);
 
         // The gfx1250 async-to-LDS builtins want address-space-qualified
         // pointers (AS(1) global, AS(3) LDS). `reinterpret_cast` cannot add
         // an address space, so route through `uintptr_t` + a C-style cast,
         // matching the pattern used elsewhere in this file for AS(3).
         uintptr_t g_uint = reinterpret_cast<uintptr_t>(base + row * row_stride + col);
-        uintptr_t l_uint = reinterpret_cast<uintptr_t>(lds_dst + Pad::padded(lds_flat));
+        uintptr_t l_uint = reinterpret_cast<uintptr_t>(dst.data + dst.lds_offset(i));
         auto* g_ptr = (detail::i32x4_gvec*)(g_uint);
         auto* l_ptr = (detail::i32x4_lvec*)(l_uint);
 
@@ -628,11 +550,10 @@ __device__ inline void load_async(T* __restrict__ lds_dst, const GL& src, const 
  *
  * Drain with `kittens::sync::wait_tdm()`.
  *
- * @tparam Pad      LDS padding descriptor.
- * @tparam ROWS,COLS  Tile shape (elements).
- * @param  lds_dst     16B-aligned LDS pointer.
+ * @param  dst         Destination `st_pad` tile (its shape's pad fields drive the D#).
  * @param  src         Global tile descriptor.
  * @param  idx         Tile coordinate.
+ * @param  tensor_rows,tensor_cols  Source tensor extents (elements).
  * @param  row_stride  Source row stride (elements).
  * @param  cluster_mask Optional `workgroup_mask` (0 for single-WG, non-zero
  *                     to switch the load into `CLUSTER_LOAD_ASYNC` micro-ops).
@@ -646,12 +567,13 @@ using v8u32 = unsigned int __attribute__((ext_vector_type(8)));
  * @brief Build the 12-DWord TDM D# (groups 0 + 1) for a 2D tile transfer.
  *
  * Encapsulates the bit-packing shared by `load_tdm` and `load_tdm_arrive`.
- * `bar_lds_addr` is the LDS byte address of a `barrier_lds` cell when the
- * caller wants the TDM unit to auto-arrive at completion (sets the
- * `atomic_barrier_enable` bit and stuffs the address into group 1). Pass 0
- * for the no-barrier path.
+ * The LDS padding fields are read from the tile shape (`Shape::pad_interval`
+ * / `Shape::pad_amount`). `bar_lds_addr` is the LDS byte address of a
+ * `barrier_lds` cell when the caller wants the TDM unit to auto-arrive at
+ * completion (sets the `atomic_barrier_enable` bit and stuffs the address
+ * into group 1). Pass 0 for the no-barrier path.
  */
-template<typename Pad, int ROWS, int COLS, typename T>
+template<typename Shape, int ROWS, int COLS, typename T>
 __device__ __forceinline__ void build_tdm_d_2d(
     v4u32& g0, v8u32& g1,
     const T* base, T* lds_dst,
@@ -674,11 +596,11 @@ __device__ __forceinline__ void build_tdm_d_2d(
                                      : (sizeof(T) == 2) ? 1
                                      : (sizeof(T) == 4) ? 2
                                      : 3;
-    constexpr uint32_t pad_enable   = (Pad::interval > 0) ? 1u : 0u;
-    constexpr uint32_t pad_int_enc  = (Pad::interval > 0)
-        ? ( __builtin_ctz(Pad::interval * sizeof(T) / 4) ) : 0;
-    constexpr uint32_t pad_amt_enc  = (Pad::amount > 0)
-        ? ( (Pad::amount * sizeof(T) / 4) - 1 ) : 0;
+    constexpr uint32_t pad_enable   = (Shape::pad_interval > 0) ? 1u : 0u;
+    constexpr uint32_t pad_int_enc  = (Shape::pad_interval > 0)
+        ? ( __builtin_ctz(Shape::pad_interval * sizeof(T) / 4) ) : 0;
+    constexpr uint32_t pad_amt_enc  = (Shape::pad_amount > 0)
+        ? ( (Shape::pad_amount * sizeof(T) / 4) - 1 ) : 0;
 
     // atomic_barrier_enable lives at bit 18 of group 1 word 0
     // (per the MI400 TDM D# layout: w0 = multicast_mask[15:0],
@@ -714,16 +636,15 @@ __device__ __forceinline__ void build_tdm_d_2d(
     g1[4] = w4; g1[5] = w5; g1[6] = w6; g1[7] = w7;
 }
 
-} // namespace detail (g2s)
+} // namespace detail
 
-template<typename Pad = lds_nopad, int ROWS = 0, int COLS = 0,
-         typename T, ducks::gl::all GL, ducks::coord::tile COORD = coord<>>
-__device__ inline void load_tdm(T* __restrict__ lds_dst, const GL& src, const COORD& idx,
+template<typename T, int ROWS, int COLS, ducks::st_shape::all Shape,
+         ducks::gl::all GL, ducks::coord::tile COORD = coord<>>
+__device__ inline void load_tdm(st_pad<T, ROWS, COLS, Shape>& dst, const GL& src,
+                                const COORD& idx,
                                 int tensor_rows, int tensor_cols, int row_stride,
                                 uint32_t cluster_mask = 0)
 {
-    static_assert(ROWS > 0 && COLS > 0, "ROWS and COLS must be specified");
-
     const int gr_base = idx.r * ROWS;
     const int gc_base = idx.c * COLS;
     const T* base = src.raw_ptr
@@ -732,8 +653,8 @@ __device__ inline void load_tdm(T* __restrict__ lds_dst, const GL& src, const CO
 
     detail::v4u32 g0;
     detail::v8u32 g1;
-    detail::build_tdm_d_2d<Pad, ROWS, COLS, T>(
-        g0, g1, base, lds_dst, tensor_rows, tensor_cols, row_stride,
+    detail::build_tdm_d_2d<Shape, ROWS, COLS, T>(
+        g0, g1, base, dst.data, tensor_rows, tensor_cols, row_stride,
         cluster_mask, /*bar_lds_addr=*/ 0);
 
     detail::v4u32 g2 = {0, 0, 0, 0};
@@ -768,15 +689,13 @@ __device__ inline void load_tdm(T* __restrict__ lds_dst, const GL& src, const CO
  * @param bar  Pointer to a 64-bit LDS barrier counter (a `sync::barrier_lds`
  *             cell). Must point at LDS storage; must be 8-byte aligned.
  */
-template<typename Pad = lds_nopad, int ROWS = 0, int COLS = 0,
-         typename T, ducks::gl::all GL, ducks::coord::tile COORD = coord<>>
+template<typename T, int ROWS, int COLS, ducks::st_shape::all Shape,
+         ducks::gl::all GL, ducks::coord::tile COORD = coord<>>
 __device__ inline void load_tdm_arrive(
-    T* __restrict__ lds_dst, const GL& src, const COORD& idx,
+    st_pad<T, ROWS, COLS, Shape>& dst, const GL& src, const COORD& idx,
     int tensor_rows, int tensor_cols, int row_stride,
     uint64_t* bar, uint32_t cluster_mask = 0)
 {
-    static_assert(ROWS > 0 && COLS > 0, "ROWS and COLS must be specified");
-
     const int gr_base = idx.r * ROWS;
     const int gc_base = idx.c * COLS;
     const T* base = src.raw_ptr
@@ -788,8 +707,8 @@ __device__ inline void load_tdm_arrive(
 
     detail::v4u32 g0;
     detail::v8u32 g1;
-    detail::build_tdm_d_2d<Pad, ROWS, COLS, T>(
-        g0, g1, base, lds_dst, tensor_rows, tensor_cols, row_stride,
+    detail::build_tdm_d_2d<Shape, ROWS, COLS, T>(
+        g0, g1, base, dst.data, tensor_rows, tensor_cols, row_stride,
         cluster_mask, bar_lds_addr);
 
     detail::v4u32 g2 = {0, 0, 0, 0};
@@ -829,6 +748,5 @@ __device__ inline void prefetch_l2(const GL& src, const COORD& idx, int row_stri
     }
 }
 
-} // namespace g2s
 #endif // KITTENS_UDNA1
 }

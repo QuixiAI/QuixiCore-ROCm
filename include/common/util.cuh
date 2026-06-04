@@ -301,6 +301,14 @@ using bytes_16 = HIP_vector_type<float, 4>;
 struct KITTENS_DEFAULT_ALIGN alignment_dummy { int dummy; };
 
 #ifdef KITTENS_UDNA1
+namespace detail {
+/// @brief 16B (`int4`) vector types tagged with the address spaces the gfx1250
+///        `*_load_async_to_lds_b128` builtins require (AS1 = global, AS3 = LDS).
+using i32x4_vec   = int __attribute__((__vector_size__(16)));
+using i32x4_gvec  = int __attribute__((__vector_size__(16))) __attribute__((address_space(1)));
+using i32x4_lvec  = int __attribute__((__vector_size__(16))) __attribute__((address_space(3)));
+} // namespace detail
+
 /**
  * @brief Compile-time tag selecting an LDS segment for tile placement on gfx1250.
  *

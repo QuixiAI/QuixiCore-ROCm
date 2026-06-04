@@ -184,4 +184,71 @@ template<int _height, int _width, ducks::st_shape::all _shape> using st_bf = st<
 template<int _height, int _width, ducks::st_shape::all _shape> using st_hf = st<half,  _height, _width, _shape>;
 template<int _height, int _width, ducks::st_shape::all _shape> using st_fl = st<float, _height, _width, _shape>;
 template<int _height, int _width, ducks::st_shape::all _shape> using st_fp8e4m3 = st<fp8e4m3, _height, _width, _shape>;
+
+#ifdef KITTENS_UDNA1
+/* ----------  gfx1250 PADDED SHARED TILE  ---------- */
+
+/**
+ * @brief gfx1250 shared tile that carries LDS bank-conflict padding on the type.
+ *
+ * `st<>`'s XOR swizzles are size-preserving, so `data[rows*cols]` is enough.
+ * gfx1250 instead uses size-increasing LDS padding to break bank conflicts, so
+ * this tile sizes its storage from the shape and owns the subtile-major + pad
+ * address map. gfx1250 load/store ops dispatch through this type, replacing the
+ * separate `Pad` descriptor. It quacks like an `st` (`ducks::st::identifier`).
+ *
+ * The address map is byte-identical to the previous `lds_padded` path:
+ * `lds_offset(flat) = shape::padded(subtile_flat(flat))`.
+ */
+template<typename _T, int _rows, int _cols,
+         ducks::st_shape::all _shape = ducks::st_shape::st_16x32_padded<>>
+struct KITTENS_DEFAULT_ALIGN st_pad {
+    using identifier = ducks::st::identifier;
+    using T  = base_types::packing<_T>::unpacked_type;
+    using T2 = base_types::packing<_T>::packed_type;
+    using dtype = T;
+    using shape = _shape;
+
+    static constexpr int rows         = _rows;
+    static constexpr int cols         = _cols;
+    static constexpr int num_elements = rows * cols;
+
+    // Subtile geometry comes from the shape (16x32 on gfx1250).
+    static constexpr int sub_rows = shape::rows;
+    static constexpr int sub_cols = shape::cols;
+
+    // Padding is size-increasing, so size storage off the shape.
+    static constexpr int storage_elements = shape::storage_elems(rows * cols);
+    dtype data[storage_elements];
+
+    /// @brief Row-major flat index -> subtile-major flat index (subtiles row-major).
+    __device__ __host__ __forceinline__ static constexpr int subtile_flat(int flat) {
+        constexpr int sub_elems    = sub_rows * sub_cols;
+        constexpr int subs_per_row = cols / sub_cols;
+        const int subtile_id = flat / sub_elems;
+        const int local_idx  = flat % sub_elems;
+        const int local_row  = local_idx / sub_cols;
+        const int local_col  = local_idx % sub_cols;
+        const int sub_r      = subtile_id / subs_per_row;
+        const int sub_c      = subtile_id % subs_per_row;
+        return sub_r * sub_rows * cols
+             + sub_c * sub_cols
+             + local_row * cols
+             + local_col;
+    }
+
+    /// @brief Pad a subtile-major flat index (identity for unpadded shapes).
+    __device__ __host__ __forceinline__ static constexpr int padded(int subtile_major_flat) {
+        return shape::padded(subtile_major_flat);
+    }
+
+    /// @brief Row-major flat index -> physical padded LDS element offset.
+    __device__ __host__ __forceinline__ static constexpr int lds_offset(int flat) {
+        return padded(subtile_flat(flat));
+    }
+};
+
+template<int _rows, int _cols, ducks::st_shape::all _shape = ducks::st_shape::st_16x32_padded<>>
+using st_pad_bf = st_pad<bf16, _rows, _cols, _shape>;
+#endif
 }
