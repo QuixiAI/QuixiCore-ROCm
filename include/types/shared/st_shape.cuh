@@ -237,55 +237,24 @@ struct st_16x128 {
 
 #ifdef KITTENS_UDNA1
 /**
- * @brief 16x32 shared subtile, flat row-major (no swizzle) -- gfx1250.
- *
- * The XOR swizzle used on CDNA collides with the wave-32 `ds_load_b32` lane
- * mapping on gfx1250 and dropped half the elements when first ported. The
- * flat layout is the correctness baseline on gfx1250 and matches the
- * subtile-major addressing used by `ops/warp/memory/tile/global_to_shared.cuh`
- * when `KITTENS_UDNA1` is defined.
- */
-struct st_16x32_nosz {
-    static constexpr int rows = 16;
-    static constexpr int cols = 32;
-
-    template<typename _T>
-    static constexpr int bytes_per_thread() {
-        if constexpr (sizeof(_T) == 2 || sizeof(_T) == 4) {
-            return 16;
-        } else {
-            static_assert(false, "Unsupported type");
-        }
-    }
-
-    template<typename _T>
-    __device__ __forceinline__ static const uint32_t swizzle(int2 coord) {
-        const int r = coord.x, c = coord.y;
-        return sizeof(_T) * (r * cols + c);
-    }
-
-    // Padding interface consumed by `st_pad` (no padding for the flat layout).
-    static constexpr int pad_interval = 0;
-    static constexpr int pad_amount   = 0;
-    __device__ __host__ __forceinline__ static constexpr int padded(int flat) { return flat; }
-    static constexpr int storage_elems(int total) { return total; }
-};
-
-/**
  * @brief 16x32 shared subtile with LDS bank-conflict padding -- gfx1250.
  *
- * Inserts `PAD_AMOUNT` pad elements every `PAD_INTERVAL` logical elements
- * (matching the recommended 16 B padding every 256 B for `bf16` and `f16`).
+ * Inserts `PAD_AMOUNT` pad elements every `PAD_INTERVAL` logical elements.
+ * Both parameters are counted in **elements, not bytes**: at `sizeof(bf16) = 2`
+ * the defaults `<128, 8>` are exactly the recommended "16 B padding every 256 B"
+ * (8 elems x 2 B = 16 B inserted per 128 elems x 2 B = 256 B). So the `8` here
+ * and the 16 B recommendation are the same quantity in different units.
  * The padded offset is computed as `flat + (flat / PAD_INTERVAL) * PAD_AMOUNT`
  * where `flat` is the row-major byte offset divided by `sizeof(T)`.
  *
  * The shape's `swizzle()` returns the padded *byte* offset directly so
  * downstream callers do not need to know about the layout. Storage size in
- * elements is `rows*cols + (rows*cols / PAD_INTERVAL) * PAD_AMOUNT`; the
- * library accommodates this through `st::data[]` being sized off `rows*cols`
- * for the unpadded baseline -- kernels using padded layouts should allocate a
- * raw `bf16` buffer sized via `padded_elems` and view it as a flat slab.
+ * elements is `rows*cols + (rows*cols / PAD_INTERVAL) * PAD_AMOUNT`; `st` sizes
+ * `st::data[]` directly off this via the shape's `storage_elems()`, so an
+ * `st_bf<R,C>` allocation already carries the padded slab (size-preserving
+ * shapes report `rows*cols` and are unaffected).
  */
+// PAD_INTERVAL / PAD_AMOUNT count ELEMENTS, not bytes: <128, 8> == 16 B every 256 B at bf16.
 template<int PAD_INTERVAL = 128, int PAD_AMOUNT = 8>
 struct st_16x32_padded {
     static constexpr int rows          = 16;
@@ -314,7 +283,7 @@ struct st_16x32_padded {
         return total_elems + (total_elems / PAD_INTERVAL) * PAD_AMOUNT;
     }
 
-    // Padding interface consumed by `st_pad`.
+    // Padding interface consumed by `st` (storage sizing + LDS address map).
     __device__ __host__ __forceinline__ static constexpr int padded(int flat) {
         return flat + (flat / PAD_INTERVAL) * PAD_AMOUNT;
     }
@@ -329,7 +298,6 @@ concept all = std::is_same_v<T, st_16x16> ||
               std::is_same_v<T, st_32x16> || 
               std::is_same_v<T, st_8x32>  ||
               std::is_same_v<T, st_16x128> ||
-              std::is_same_v<T, st_16x32_nosz> ||
               std::is_same_v<T, st_16x32_padded<>> ||
               std::is_same_v<T, st_16x32_padded<128, 8>> ||
               std::is_same_v<T, st_16x32_padded<64, 4>>;

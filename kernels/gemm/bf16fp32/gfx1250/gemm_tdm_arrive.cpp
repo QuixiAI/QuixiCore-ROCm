@@ -1,6 +1,6 @@
 /**
  * @file gemm_tdm_arrive.cpp
- * @brief Rung 8 -- per-transfer LDS-barrier TDM GEMM for gfx1250.
+ * @brief Rung 7 -- per-transfer LDS-barrier TDM GEMM for gfx1250.
  *
  * Diff vs `gemm_expert`: replace cooperative async loads with `load_tdm`
  * issued by wave 0 (for A) and wave 1 (for B). Each TDM transfer is paired
@@ -54,8 +54,8 @@ void gemm_tdm_arrive_kernel(const gemm_globals g, int M, int N, int K)
     // the A buffers; finally B in segment 1.
     sync::barrier_lds(&A_bar)[2] = al.allocate_in<segment<0>, sync::barrier_lds, 2>();
     sync::barrier_lds(&B_bar)[2] = al.allocate_in<segment<0>, sync::barrier_lds, 2>();
-    A_tile_pad(&A_st)[2] = al.allocate_in<segment<0>, A_tile_pad, 2>();
-    B_tile_pad(&B_st)[2] = al.allocate_in<segment<1>, B_tile_pad, 2>();
+    A_tile(&A_st)[2] = al.allocate_in<segment<0>, A_tile, 2>();
+    B_tile(&B_st)[2] = al.allocate_in<segment<1>, B_tile, 2>();
 
     rt_fl<WARP_M, WARP_N, col_l, rt_16x16_s> C_acc;
     zero(C_acc);
@@ -162,7 +162,7 @@ void dispatch(gemm_globals g)
     // Same layout as `gemm_segment`/`gemm_expert` (A in seg 0, B in seg 1)
     // plus 4 barrier cells in seg 0.
     constexpr size_t bar_bytes = 4 * sizeof(sync::barrier_lds);
-    const size_t mem_size = LDS_SEGMENT_BYTES + 2 * sizeof(B_tile_pad);
+    const size_t mem_size = LDS_SEGMENT_BYTES + 2 * sizeof(B_tile);
     (void)bar_bytes;
     hipFuncSetAttribute(reinterpret_cast<const void*>(gemm_tdm_arrive_kernel),
                         hipFuncAttributeMaxDynamicSharedMemorySize,

@@ -691,17 +691,12 @@ __device__ inline static void store(ST &dst, const RT &src) {
 /* ========================================================================== *
  * gfx1250 shared -> register load
  *
- * A single `load(reg, st_pad, warp_origin_flat)` overload reads a warp's
- * `WARP_M x WARP_K` slice out of a block-level `st_pad` tile. The LDS access
- * width is chosen from the tile's layout, not by the caller:
- *  - padded shape (`st_16x32_padded`) -> wide `ds_load_b128` (two 16B loads
- *    per 16x32 subtile); the padding makes the wide access bank-conflict-free.
- *  - flat shape (`st_16x32_nosz`)     -> narrow `ds_load_b32` packed pairs (a
- *    wide load would bank-conflict on the unpadded baseline used by the naive
- *    rungs).
- * Both paths read the same 16 contiguous `bf16` per lane through the tile's
- * own padded address map, so swapping the tile type flips the load width with
- * no other change.
+ * A single `load(reg, st, warp_origin_flat)` overload reads a warp's
+ * `WARP_M x WARP_K` slice out of a block-level `st` tile. The tile owns the
+ * subtile-major + bank-conflict padding LDS address map; the load issues two
+ * wide `ds_load_b128`s per 16x32 subtile. The padding carried by the tile shape
+ * is what makes the wide LDS access bank-conflict-free -- this is the gfx1250
+ * production layout, and there is no unpadded variant.
  *
  * The destination is a `rt_bf<WARP_M, WARP_K, row_l, rt_16x32_s>` whose lane
  * storage is `bf16_2 data[8]` per subtile when `WARP_THREADS == 32`. This is
@@ -712,29 +707,30 @@ __device__ inline static void store(ST &dst, const RT &src) {
 /**
  * @brief Shared -> register load of a warp's tile slice on gfx1250.
  *
- * Reads the warp's `WARP_M x WARP_K` region (origin at `warp_origin_flat`) of
- * a block-level `st_pad` tile into the WMMA bf16 operand layout. The source
- * tile owns the subtile-major + padding LDS address map, so one call serves
- * both flat (`st_16x32_nosz`) and padded (`st_16x32_padded`) tiles.
+ * Reads the warp's `WARP_M x WARP_K` region (origin at `warp_origin_flat`) of a
+ * block-level `st` tile into the WMMA bf16 operand layout. The source tile
+ * owns the subtile-major + padding LDS address map, so the caller only supplies
+ * the warp-origin flat index.
  *
- * The LDS access width is selected from the tile's layout, not the caller:
- * a padded tile issues two wide `ds_load_b128`s per 16x32 subtile (the padding
- * keeps them bank-conflict-free), while a flat tile reads narrow `ds_load_b32`
- * packed pairs (a wide load would bank-conflict on the unpadded baseline).
- * Both fill the 16 `bf16` per lane that `wmma_f32_16x16x32_bf16` consumes, read
- * from the same physical offset `src.data + src.padded(base_flat)`.
+ * Each 16x32 subtile is filled by two wide `ds_load_b128`s (the 16 `bf16` per
+ * lane that `wmma_f32_16x16x32_bf16` consumes), read from the padded physical
+ * offset `src.data + src.padded(base_flat)`. The bank-conflict padding carried
+ * by the tile shape is what keeps the wide load conflict-free.
  *
  * @tparam WARP_M, WARP_K   Per-warp tile dimensions (multiples of 16/32); deduced from `dst`.
  * @param dst              Destination register tile.
- * @param src              Source shared tile (`st_pad`).
+ * @param src              Source shared tile (`st`, padded layout).
  * @param warp_origin_flat Row-major flat index of the warp's tile origin in
  *                         `src` (subtile-aligned; the type applies padding).
  */
 template<int WARP_M, int WARP_K, typename T, int R, int C, ducks::st_shape::all Shape>
 __device__ inline void load(
     rt_bf<WARP_M, WARP_K, ducks::rt_layout::row, ducks::rt_shape::rt_16x32>& dst,
-    const st_pad<T, R, C, Shape>& src, int warp_origin_flat)
+    const st<T, R, C, Shape>& src, int warp_origin_flat)
 {
+    static_assert(Shape::pad_interval > 0,
+        "gfx1250 shared->register load requires a padded tile (e.g. st_bf<R,C>)");
+
     constexpr int sub_rows     = Shape::rows;
     constexpr int sub_cols     = Shape::cols;
     constexpr int sub_elems    = sub_rows * sub_cols;
@@ -758,40 +754,28 @@ __device__ inline void load(
                                  + half * half_cols;
             const int padded_off = src.padded(base_flat);
 
-            if constexpr (Shape::pad_interval > 0) {
-                // Padded layout: wide ds_load_b128 (two 16B loads = 16 bf16),
-                // bank-conflict-free thanks to the padding.
-                const uint32_t addr = static_cast<uint32_t>(
-                    reinterpret_cast<uintptr_t>(src.data + padded_off));
+            // Two 16B ds_load_b128s fill the 16 bf16 per lane; bank-conflict-free
+            // thanks to the tile's padding.
+            const uint32_t addr = static_cast<uint32_t>(
+                reinterpret_cast<uintptr_t>(src.data + padded_off));
 
-                float4 lo, hi;
-                asm volatile("ds_load_b128 %0, %1 offset:0\n"
-                    : "=v"(lo) : "v"(addr) : "memory");
-                asm volatile("ds_load_b128 %0, %1 offset:16\n"
-                    : "=v"(hi) : "v"(addr) : "memory");
+            float4 lo, hi;
+            asm volatile("ds_load_b128 %0, %1 offset:0\n"
+                : "=v"(lo) : "v"(addr) : "memory");
+            asm volatile("ds_load_b128 %0, %1 offset:16\n"
+                : "=v"(hi) : "v"(addr) : "memory");
 
-                bf16_2* lo_p = reinterpret_cast<bf16_2*>(&lo);
-                bf16_2* hi_p = reinterpret_cast<bf16_2*>(&hi);
+            bf16_2* lo_p = reinterpret_cast<bf16_2*>(&lo);
+            bf16_2* hi_p = reinterpret_cast<bf16_2*>(&hi);
 
-                dst.tiles[ti][tj].data[0] = lo_p[0];
-                dst.tiles[ti][tj].data[1] = lo_p[1];
-                dst.tiles[ti][tj].data[2] = lo_p[2];
-                dst.tiles[ti][tj].data[3] = lo_p[3];
-                dst.tiles[ti][tj].data[4] = hi_p[0];
-                dst.tiles[ti][tj].data[5] = hi_p[1];
-                dst.tiles[ti][tj].data[6] = hi_p[2];
-                dst.tiles[ti][tj].data[7] = hi_p[3];
-            } else {
-                // Flat baseline: narrow ds_load_b32 packed pairs (a wide load
-                // would bank-conflict on the unpadded layout).
-                const bf16_2* lds_p = reinterpret_cast<const bf16_2*>(
-                    src.data + padded_off);
-
-                #pragma unroll
-                for (int k = 0; k < 8; k++) {
-                    dst.tiles[ti][tj].data[k] = lds_p[k];
-                }
-            }
+            dst.tiles[ti][tj].data[0] = lo_p[0];
+            dst.tiles[ti][tj].data[1] = lo_p[1];
+            dst.tiles[ti][tj].data[2] = lo_p[2];
+            dst.tiles[ti][tj].data[3] = lo_p[3];
+            dst.tiles[ti][tj].data[4] = hi_p[0];
+            dst.tiles[ti][tj].data[5] = hi_p[1];
+            dst.tiles[ti][tj].data[6] = hi_p[2];
+            dst.tiles[ti][tj].data[7] = hi_p[3];
         }
     }
 }

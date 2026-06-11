@@ -1,6 +1,6 @@
 /**
  * @file gemm_segment.cpp
- * @brief Rung 6 -- multi-segment LDS for gfx1250.
+ * @brief Rung 5 -- multi-segment LDS for gfx1250.
  *
  * Diff vs `gemm_split_bar`: place A in LDS segment 0 and B in segment 1 so
  * the hardware's two read ports (256 B/cycle each) can serve A and B reads
@@ -18,8 +18,8 @@ void gemm_segment_kernel(const gemm_globals g, int M, int N, int K)
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al(reinterpret_cast<int*>(&__shm[0]));
 
-    A_tile_pad(&A_st)[2] = al.allocate_in<segment<0>, A_tile_pad, 2>();
-    B_tile_pad(&B_st)[2] = al.allocate_in<segment<1>, B_tile_pad, 2>();
+    A_tile(&A_st)[2] = al.allocate_in<segment<0>, A_tile, 2>();
+    B_tile(&B_st)[2] = al.allocate_in<segment<1>, B_tile, 2>();
 
     rt_fl<WARP_M, WARP_N, col_l, rt_16x16_s> C_acc;
     zero(C_acc);
@@ -69,7 +69,7 @@ void dispatch(gemm_globals g)
 {
     // A occupies segment 0 (0..64KB); B occupies segment 1 (64KB..). We
     // request `LDS_SEGMENT_BYTES + B_size` so the launch covers both segments.
-    const size_t mem_size = LDS_SEGMENT_BYTES + 2 * sizeof(B_tile_pad);
+    const size_t mem_size = LDS_SEGMENT_BYTES + 2 * sizeof(B_tile);
     hipFuncSetAttribute(reinterpret_cast<const void*>(gemm_segment_kernel),
                         hipFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(mem_size));
     gemm_segment_kernel<<<g.grid(), g.block(), mem_size, g.stream>>>(g, g.M(), g.N(), g.K());

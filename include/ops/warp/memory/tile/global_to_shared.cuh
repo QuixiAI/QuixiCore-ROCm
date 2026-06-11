@@ -435,11 +435,11 @@ __device__ static inline void store(const GL &dst, const ST &src, const COORD &i
  *     moves a WHOLE tile per instruction from an SGPR descriptor 
  *     and does its own address generation. Drained with `wait_tdm`.
  *
- * These ops dispatch through a gfx1250 shared-tile type (`st_pad`) that owns
- * its padded LDS storage and address map, mirroring the canonical
- * `load(tile, gl, idx)` surface -- no separate padding descriptor. Kernels
- * allocate an `st_pad`/`st_pad_bf` tile (optionally via
- * `shared_allocator::allocate_in<segment<I>>`) and pass it straight in.
+ * These ops dispatch through the gfx1250 shared tile `st`, which owns its LDS
+ * storage and address map, mirroring the canonical `load(tile, gl, idx)`
+ * surface -- no separate padding descriptor. Kernels allocate an `st_bf` tile
+ * (optionally via `shared_allocator::allocate_in<segment<I>>`) and pass it
+ * straight in.
  *
  */
 #ifdef KITTENS_UDNA1
@@ -449,11 +449,11 @@ __device__ static inline void store(const GL &dst, const ST &src, const COORD &i
  *
  * Plain `global_load` -> VGPR -> `ds_store` path. Use this when no async
  * intrinsic is available or for correctness baselines. The destination
- * `st_pad` tile owns the subtile-major + padding LDS address map.
+ * `st` tile owns the subtile-major + padding LDS address map.
  */
 template<int N_THREADS = WARP_THREADS, typename T, int ROWS, int COLS,
          ducks::st_shape::all Shape, ducks::gl::all GL, ducks::coord::tile COORD = coord<>>
-__device__ inline void load(st_pad<T, ROWS, COLS, Shape>& dst, const GL& src,
+__device__ inline void load(st<T, ROWS, COLS, Shape>& dst, const GL& src,
                             const COORD& idx, int row_stride)
 {
     constexpr int total_elems = ROWS * COLS;
@@ -470,7 +470,7 @@ __device__ inline void load(st_pad<T, ROWS, COLS, Shape>& dst, const GL& src,
     for (int i = tid; i < total_elems; i += N_THREADS) {
         const int row = i / COLS;
         const int col = i % COLS;
-        // st_pad maps the logical (row-major) index to its subtile-major,
+        // st maps the logical (row-major) index to its subtile-major,
         // padded LDS slot.
         dst.data[dst.lds_offset(i)] = base[row * row_stride + col];
     }
@@ -485,7 +485,7 @@ __device__ inline void load(st_pad<T, ROWS, COLS, Shape>& dst, const GL& src,
  * iteration. Drain with `kittens::sync::wait_async()` before consuming.
  *
  * @tparam N_THREADS    Number of threads participating in the load.
- * @param  dst          Destination `st_pad` tile (owns the padded LDS map).
+ * @param  dst          Destination `st` tile (owns the padded LDS map).
  * @param  src          Global tile descriptor.
  * @param  idx          Tile coordinate inside `src`.
  * @param  row_stride   Element stride between rows in `src`.
@@ -493,7 +493,7 @@ __device__ inline void load(st_pad<T, ROWS, COLS, Shape>& dst, const GL& src,
  */
 template<int N_THREADS = WARP_THREADS, typename T, int ROWS, int COLS,
          ducks::st_shape::all Shape, ducks::gl::all GL, ducks::coord::tile COORD = coord<>>
-__device__ inline void load_async(st_pad<T, ROWS, COLS, Shape>& dst, const GL& src,
+__device__ inline void load_async(st<T, ROWS, COLS, Shape>& dst, const GL& src,
                                   const COORD& idx, int row_stride, uint32_t cluster_mask = 0)
 {
     static_assert(sizeof(T) * 8 == 16, "load_async issues one b128 (16B) per lane");
@@ -550,7 +550,7 @@ __device__ inline void load_async(st_pad<T, ROWS, COLS, Shape>& dst, const GL& s
  *
  * Drain with `kittens::sync::wait_tdm()`.
  *
- * @param  dst         Destination `st_pad` tile (its shape's pad fields drive the D#).
+ * @param  dst         Destination `st` tile (its shape's pad fields drive the D#).
  * @param  src         Global tile descriptor.
  * @param  idx         Tile coordinate.
  * @param  tensor_rows,tensor_cols  Source tensor extents (elements).
@@ -640,7 +640,7 @@ __device__ __forceinline__ void build_tdm_d_2d(
 
 template<typename T, int ROWS, int COLS, ducks::st_shape::all Shape,
          ducks::gl::all GL, ducks::coord::tile COORD = coord<>>
-__device__ inline void load_tdm(st_pad<T, ROWS, COLS, Shape>& dst, const GL& src,
+__device__ inline void load_tdm(st<T, ROWS, COLS, Shape>& dst, const GL& src,
                                 const COORD& idx,
                                 int tensor_rows, int tensor_cols, int row_stride,
                                 uint32_t cluster_mask = 0)
@@ -692,7 +692,7 @@ __device__ inline void load_tdm(st_pad<T, ROWS, COLS, Shape>& dst, const GL& src
 template<typename T, int ROWS, int COLS, ducks::st_shape::all Shape,
          ducks::gl::all GL, ducks::coord::tile COORD = coord<>>
 __device__ inline void load_tdm_arrive(
-    st_pad<T, ROWS, COLS, Shape>& dst, const GL& src, const COORD& idx,
+    st<T, ROWS, COLS, Shape>& dst, const GL& src, const COORD& idx,
     int tensor_rows, int tensor_cols, int row_stride,
     uint64_t* bar, uint32_t cluster_mask = 0)
 {

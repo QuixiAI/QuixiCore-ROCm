@@ -2,13 +2,13 @@
  * @file gemm_naive.cpp
  * @brief Rung 1 -- naive bf16 -> fp32 GEMM for gfx1250.
  *
- * Correctness baseline. Single-buffered LDS, register-mediated global -> LDS
- * copy, narrow `ds_load_b32` shared -> register, plain WMMA via `mma_ABt`.
- * Uses only:
+ * Correctness baseline. Single-buffered padded LDS, register-mediated
+ * global -> LDS copy, wide `ds_load_b128` shared -> register, plain WMMA via
+ * `mma_ABt`. Uses only:
  *   - `kittens::load(st,gl,idx)` : register-mediated global -> LDS copy.
  *   - `kittens::sync::sync`      : block-wide split barrier.
  *   - `kittens::sync::wait_ds`   : drain LDS reads before WMMA.
- *   - `kittens::load(rt,st,off)` : shared -> register load (narrow `ds_load_b32` for the flat tile).
+ *   - `kittens::load(rt,st,off)` : shared -> register load (wide `ds_load_b128`).
  *   - `kittens::mma_ABt`         : 16x16x32 WMMA via the bf16 builtin.
  */
 
@@ -23,8 +23,8 @@ void gemm_naive_kernel(const gemm_globals g, int M, int N, int K)
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al(reinterpret_cast<int*>(&__shm[0]));
 
-    A_tile_flat& A_st = al.allocate<A_tile_flat>();
-    B_tile_flat& B_st = al.allocate<B_tile_flat>();
+    A_tile& A_st = al.allocate<A_tile>();
+    B_tile& B_st = al.allocate<B_tile>();
 
     rt_fl<WARP_M, WARP_N, col_l, rt_16x16_s> C_acc;
     zero(C_acc);
