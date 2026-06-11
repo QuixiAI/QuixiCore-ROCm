@@ -439,6 +439,35 @@ __device__ __forceinline__ T buffer_load_dwordx2(
 }
 
 template<int GPR_START>
+__device__ __forceinline__ void buffer_load_dwordx3(const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const int i_offset = 0) {
+  if constexpr (GPR_START >= 256) {
+    asm volatile("buffer_load_dwordx3 a[%0:%1], %2, %3, %4 offen offset:%5"
+      :
+      : "n"(GPR_START - 256), "n"(GPR_START + 2 - 256), "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+      : "memory");
+  } else {
+    asm volatile("buffer_load_dwordx3 v[%0:%1], %2, %3, %4 offen offset:%5"
+      :
+      : "n"(GPR_START), "n"(GPR_START + 2), "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+      : "memory");
+  }
+}
+
+// Returns a u32x3 (ext_vector_type(3)). Note sizeof(u32x3) == 16 due to vector
+// alignment padding, but the compiler still allocates exactly 3 consecutive VGPRs
+// for the "=v" operand and emits buffer_load_dwordx3 v[N:N+2].
+template<typename T = u32x3>
+__device__ __forceinline__ T buffer_load_dwordx3(
+  const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  T result;
+  asm volatile("buffer_load_dwordx3 %0, %1, %2, %3 offen offset:%4"
+    : "=v"(result)
+    : "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+  return result;
+}
+
+template<int GPR_START>
 __device__ __forceinline__ void buffer_load_dwordx4(const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const int i_offset = 0) {
   if constexpr (GPR_START >= 256) {
     asm volatile("buffer_load_dwordx4 a[%0:%1], %2, %3, %4 offen offset:%5"
@@ -463,6 +492,116 @@ __device__ __forceinline__ T buffer_load_dwordx4(
     : "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
     : "memory");
   return result;
+}
+
+template<typename T = uint32_t>
+__device__ __forceinline__ T buffer_load_ubyte(
+  const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  T result;
+  asm volatile("buffer_load_ubyte %0, %1, %2, %3 offen offset:%4"
+    : "=v"(result)
+    : "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+  return result;
+}
+
+template<typename T = uint32_t>
+__device__ __forceinline__ T buffer_load_sbyte(
+  const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  T result;
+  asm volatile("buffer_load_sbyte %0, %1, %2, %3 offen offset:%4"
+    : "=v"(result)
+    : "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+  return result;
+}
+
+template<typename T = uint32_t>
+__device__ __forceinline__ T buffer_load_ushort(
+  const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  T result;
+  asm volatile("buffer_load_ushort %0, %1, %2, %3 offen offset:%4"
+    : "=v"(result)
+    : "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+  return result;
+}
+
+template<typename T = uint32_t>
+__device__ __forceinline__ T buffer_load_sshort(
+  const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  T result;
+  asm volatile("buffer_load_sshort %0, %1, %2, %3 offen offset:%4"
+    : "=v"(result)
+    : "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+  return result;
+}
+
+// d16 variants merge the loaded sub-dword into the low (or high, for _hi) 16 bits
+// of the destination register, leaving the other half untouched: read-modify-write.
+template<typename T = uint32_t>
+__device__ __forceinline__ void buffer_load_ubyte_d16(
+  T& dst, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  asm volatile("buffer_load_ubyte_d16 %0, %1, %2, %3 offen offset:%4"
+    : "+v"(dst)
+    : "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+}
+
+template<typename T = uint32_t>
+__device__ __forceinline__ void buffer_load_ubyte_d16_hi(
+  T& dst, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  asm volatile("buffer_load_ubyte_d16_hi %0, %1, %2, %3 offen offset:%4"
+    : "+v"(dst)
+    : "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+}
+
+template<typename T = uint32_t>
+__device__ __forceinline__ void buffer_load_sbyte_d16(
+  T& dst, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  asm volatile("buffer_load_sbyte_d16 %0, %1, %2, %3 offen offset:%4"
+    : "+v"(dst)
+    : "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+}
+
+template<typename T = uint32_t>
+__device__ __forceinline__ void buffer_load_sbyte_d16_hi(
+  T& dst, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  asm volatile("buffer_load_sbyte_d16_hi %0, %1, %2, %3 offen offset:%4"
+    : "+v"(dst)
+    : "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+}
+
+template<typename T = uint32_t>
+__device__ __forceinline__ void buffer_load_short_d16(
+  T& dst, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  asm volatile("buffer_load_short_d16 %0, %1, %2, %3 offen offset:%4"
+    : "+v"(dst)
+    : "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+}
+
+template<typename T = uint32_t>
+__device__ __forceinline__ void buffer_load_short_d16_hi(
+  T& dst, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  asm volatile("buffer_load_short_d16_hi %0, %1, %2, %3 offen offset:%4"
+    : "+v"(dst)
+    : "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
 }
 
 template<int GPR>
@@ -520,6 +659,32 @@ __device__ __forceinline__ void buffer_store_dwordx2(
 }
 
 template<int GPR_START>
+__device__ __forceinline__ void buffer_store_dwordx3(const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const int i_offset = 0) {
+  // AGPRS
+  if constexpr (GPR_START >= 256) {
+    asm volatile("buffer_store_dwordx3 a[%0:%1], %2, %3, %4 offen offset:%5"
+      :
+      : "n"(GPR_START - 256), "n"(GPR_START + 2 - 256), "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+      : "memory");
+  // VGPRS
+  } else {
+    asm volatile("buffer_store_dwordx3 v[%0:%1], %2, %3, %4 offen offset:%5"
+      :
+      : "n"(GPR_START), "n"(GPR_START + 2), "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+      : "memory");
+  }
+}
+
+template<typename T = u32x3>
+__device__ __forceinline__ void buffer_store_dwordx3(
+  const T& value, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  asm volatile("buffer_store_dwordx3 %0, %1, %2, %3 offen offset:%4"
+    :
+    : "v"(value), "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+}
+
+template<int GPR_START>
 __device__ __forceinline__ void buffer_store_dwordx4(const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const int i_offset = 0) {
   // AGPRS
   if constexpr (GPR_START >= 256) {
@@ -541,6 +706,50 @@ __device__ __forceinline__ void buffer_store_dwordx4(
   const T& value, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
   static_assert(sizeof(T) == sizeof(uint32_t) * 4);
   asm volatile("buffer_store_dwordx4 %0, %1, %2, %3 offen offset:%4"
+    :
+    : "v"(value), "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+}
+
+// Stores the low 8 bits of the value register.
+template<typename T = uint32_t>
+__device__ __forceinline__ void buffer_store_byte(
+  const T& value, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  asm volatile("buffer_store_byte %0, %1, %2, %3 offen offset:%4"
+    :
+    : "v"(value), "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+}
+
+// Stores the high 16 bits' low 8 bits (bits [23:16]) of the value register.
+template<typename T = uint32_t>
+__device__ __forceinline__ void buffer_store_byte_d16_hi(
+  const T& value, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  asm volatile("buffer_store_byte_d16_hi %0, %1, %2, %3 offen offset:%4"
+    :
+    : "v"(value), "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+}
+
+// Stores the low 16 bits of the value register.
+template<typename T = uint32_t>
+__device__ __forceinline__ void buffer_store_short(
+  const T& value, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  asm volatile("buffer_store_short %0, %1, %2, %3 offen offset:%4"
+    :
+    : "v"(value), "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
+    : "memory");
+}
+
+// Stores the high 16 bits of the value register.
+template<typename T = uint32_t>
+__device__ __forceinline__ void buffer_store_short_d16_hi(
+  const T& value, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(sizeof(T) == sizeof(uint32_t));
+  asm volatile("buffer_store_short_d16_hi %0, %1, %2, %3 offen offset:%4"
     :
     : "v"(value), "v"(v_offset), "s"(*(const i32x4*)&br), "s"(s_offset), "i"(i_offset)
     : "memory");

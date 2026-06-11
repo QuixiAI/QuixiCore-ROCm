@@ -52,6 +52,8 @@ __device__ __forceinline__ int laneid() { return threadIdx.x & 0x3f; }
 
 using i32x2 = int32_t __attribute__((ext_vector_type(2)));
 using u32x2 = uint32_t __attribute__((ext_vector_type(2)));
+using i32x3 = int32_t __attribute__((ext_vector_type(3)));
+using u32x3 = uint32_t __attribute__((ext_vector_type(3)));
 using i32x4 = int32_t __attribute__((ext_vector_type(4)));
 using u32x4 = uint32_t __attribute__((ext_vector_type(4)));
 
