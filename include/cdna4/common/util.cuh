@@ -28,8 +28,6 @@ namespace kittens {
 /* ----------  GENERAL CONSTANTS FOR KITTENS  ---------- */
 /**
  * @brief Constant representing number of threads in a warp.
- *
- * CDNA generations are wave-64.
  */
 constexpr int WARP_THREADS{64};
 
@@ -38,7 +36,7 @@ constexpr int WARP_THREADS{64};
  * @brief Get the warp ID of the current thread.
  * @return The warp ID.
  */
-__device__ __forceinline__ int warpid() { return threadIdx.x >> 6; }
+__device__ __forceinline__ int warpid() { return threadIdx.x >> 6; } 
 
 /**
  * @brief Get the number of warps in the threadblock.
@@ -265,21 +263,13 @@ using bytes_16 = HIP_vector_type<float, 4>;
  * @brief Dummy structure for alignment purposes. Needed for WGMMA and TMA calls.
  */
 struct KITTENS_DEFAULT_ALIGN alignment_dummy { int dummy; };
-
 /**
  * @brief Very simple allocator for dynamic shared memory. Advances pointer and tracks alignments.
- *
- * Maintains a bump cursor `ptr` that advances on every `allocate*()` call. On
- * gfx1250 the allocator also remembers `base` -- the unmoved origin of the
- * shared-memory region captured at construction -- so segment-aware
- * allocations (`allocate_in<segment<IDX>>`) can jump to `base + IDX * 64 KB`
- * regardless of how far the bump cursor has already advanced.
- *
  * @tparam default_alignment The default alignment this allocator will enforce. If <=0 (default -1) it will not align.
  */
 template<int default_alignment=16> 
 struct shared_allocator {
-    int *ptr;   ///< Bump cursor; advances on every allocate*() call.
+    int *ptr;
 
     private:
         // Recursive template to generate N-dimensional array type
@@ -309,11 +299,6 @@ struct shared_allocator {
     public:
         /**
         * @brief Construct a new shared allocator using a pointer to extern shared memory.
-        *
-        * `_ptr` is captured into the bump cursor `ptr`; on gfx1250 it is also
-        * stashed into `base` so segment-aware allocations can recover the
-        * original origin regardless of how far the cursor has advanced.
-        *
         * @param[in] _ptr Pointer to the start of the extern shared memory.
         */
         __device__ shared_allocator(int *_ptr): ptr(_ptr) {}
@@ -348,7 +333,6 @@ struct shared_allocator {
             ptr += sizeof(at)/sizeof(int);
             return *p;
         }
-
 };
 
 } // namespace kittens

@@ -415,31 +415,4 @@ template<ducks::st::all ST, ducks::gl::all GL, ducks::coord::tile COORD=coord<ST
 __device__ static inline void store(const GL &dst, const ST &src, const COORD &idx) {
     store<2, false, ST, GL, COORD, WARP_THREADS>(dst, src, idx);
 }
-
-/**
- * gfx1250 raw-pointer global <-> LDS transfers
- *
- * Three hardware paths move a global tile into LDS, all landing straight in
- * LDS with no VGPR staging:
- *
- *   - `global_load_async_to_lds_*`: each active thread copies B bytes
- *     (B8/B32/B64/B128 = 1/4/8/16 B) from global to LDS, so a b128 load moves
- *     16 B x 32 threads = 512 B per wave per instruction, into this
- *     workgroup's LDS. Drained with `wait_async`.
- *   - `cluster_load_async_to_lds_*`: the same per-wave payload, except the one
- *     L2 return is broadcast into the LDS of several workgroups in a cluster at
- *     once (up to ~5x amplification; bypasses L1) -- for workgroup-cluster
- *     kernels where multiple workgroups want the same tile. Also drained with
- *     `wait_async`.
- *   - `tensor_load_to_lds` (TDM): a dedicated DMA-style engine, 
- *     moves a WHOLE tile per instruction from an SGPR descriptor 
- *     and does its own address generation. Drained with `wait_tdm`.
- *
- * These ops dispatch through the gfx1250 shared tile `st`, which owns its LDS
- * storage and address map, mirroring the canonical `load(tile, gl, idx)`
- * surface -- no separate padding descriptor. Kernels allocate an `st_bf` tile
- * (optionally via `shared_allocator::allocate_in<segment<I>>`) and pass it
- * straight in.
- *
- */
 }

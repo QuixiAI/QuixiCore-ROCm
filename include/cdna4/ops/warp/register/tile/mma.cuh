@@ -25,7 +25,6 @@ __device__ static inline void mfma161632(      float2 (&D)[2],
     );
 }
 
-
 __device__ static inline void mfma161632(      float2 (&D)[2],
                                          const bf16_2 (&A)[4],
                                          const bf16_2 (&B)[4],
@@ -195,25 +194,14 @@ __device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::col, 
  * @brief Base dot product operation for row layout.
  *
  * This function performs the base dot product operation
- * using the mma function for matrices in row layout.
+ * using the `hmma16816` function for matrices in row layout.
  *
- * The `A_reuse` / `B_reuse` template parameters propagate down to the gfx1250
- * WMMA builtin's operand-reuse hints (see `wmma161632`). They default to
- * `false` and are silently ignored on CDNA (MFMA has no operand reuse cache).
- *
- * @tparam A_reuse,B_reuse  Operand-reuse hints (gfx1250 only).
- * @tparam D_shape,A_shape,B_shape,C_shape  Register-tile shape tags.
- * @tparam MM_Operand_T     Operand element type for A and B. Defaults to bf16.
- *
- * @param[out] d The output rt_base<float, col_layout> accumulator.
- * @param[in]  a The first input rt_base<MM_Operand_T, row_layout> matrix.
- * @param[in]  b The second input rt_base<MM_Operand_T, row_layout> matrix in row-major mode.
- * @param[in]  c The input rt_base<float, col_layout> accumulator matrix.
+ * @param[out] d The output rt_base<float2, row_layout> accumulator.
+ * @param[in] a The first input rt_base<bf16_2, row_layout> matrix.
+ * @param[in] b The second input rt_base<bf16_2, row_layout> matrix in row-major mode.
+ * @param[in] c The input rt_base<float2, row_layout> accumulator matrix.
  */
-template<bool A_reuse = false, bool B_reuse = false,
-         ducks::rt_shape::all D_shape, ducks::rt_shape::all A_shape,
-         ducks::rt_shape::all B_shape, ducks::rt_shape::all C_shape,
-         typename MM_Operand_T = bf16>
+template<ducks::rt_shape::all D_shape, ducks::rt_shape::all A_shape, ducks::rt_shape::all B_shape, ducks::rt_shape::all C_shape, typename MM_Operand_T=bf16>
 __device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::col, D_shape> &d,
     const rt_base<MM_Operand_T, ducks::rt_layout::row, A_shape> &a,
     const rt_base<MM_Operand_T, ducks::rt_layout::row, B_shape> &b, // in row-major mode
@@ -443,12 +431,15 @@ __device__ static inline void mma_AB(D &d,
  * @brief Dot product operation for row layout.
  *
  * This function performs the dot product operation
- * using the `mma_ABt_base` function.
+ * using the `hmma16816` function.
  *
- * @tparam D Accumulator register-tile type (col layout).
- * @tparam A First operand register-tile type (row layout).
- * @tparam B Second operand register-tile type (row layout), row-major for ABt.
- * @tparam C Input accumulator register-tile type (col layout).
+ * @tparam N The number of row tiles.
+ * @tparam K The number of column tiles for the A matrix and row tiles for the B matrix.
+ * @tparam M The number of column tiles for the B matrix.
+ * @param[out] d The output rt_fl<N, M, row_layout> accumulator.
+ * @param[in] a The first input rt_bf<N, K, row_layout> matrix.
+ * @param[in] b The second input rt_bf<M, K, row_layout> matrix in row-major mode.
+ * @param[in] c The input rt_fl<N, M, row_layout> accumulator matrix.
  */
 template<ducks::rt::col_layout D, ducks::rt::row_layout A, ducks::rt::row_layout B, ducks::rt::col_layout C>
 __device__ static inline void mma_ABt(D &d,
@@ -469,7 +460,6 @@ __device__ static inline void mma_ABt(D &d,
             std::is_same_v<typename B::T, fp8e4m3> && std::is_same_v<typename C::T, float>)
     );
 
-    // CDNA path: n-outer, m-inner row-major. No operand reuse cache.
     #pragma unroll
     for(int n = 0; n < D::height; n++) {
         #pragma unroll

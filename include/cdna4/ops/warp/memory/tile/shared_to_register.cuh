@@ -688,19 +688,4 @@ __device__ inline static void store(ST &dst, const RT &src) {
     }
 }
 
-/* ========================================================================== *
- * gfx1250 shared -> register load
- *
- * A single `load(reg, st, warp_origin_flat)` overload reads a warp's
- * `WARP_M x WARP_K` slice out of a block-level `st` tile. The tile owns the
- * subtile-major + bank-conflict padding LDS address map; the load issues two
- * wide `ds_load_b128`s per 16x32 subtile. The padding carried by the tile shape
- * is what makes the wide LDS access bank-conflict-free -- this is the gfx1250
- * production layout, and there is no unpadded variant.
- *
- * The destination is a `rt_bf<WARP_M, WARP_K, row_l, rt_16x32_s>` whose lane
- * storage is `bf16_2 data[8]` per subtile when `WARP_THREADS == 32`. This is
- * the operand layout consumed directly by `__builtin_amdgcn_wmma_f32_16x16x32_bf16`.
- * ========================================================================== */
-
 } // namespace kittens

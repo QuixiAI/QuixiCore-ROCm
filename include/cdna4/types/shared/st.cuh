@@ -78,50 +78,10 @@ struct KITTENS_DEFAULT_ALIGN st {
 
     static_assert(base_types::packing<dtype>::num() == 1); // must be a 1-packed type (e.g. float, bf16, etc)
 
-    // Storage is shape-driven: a size-preserving shape (XOR swizzle, the CDNA /
-    // NVIDIA default) reports `rows*cols`, while a size-increasing shape (the
-    // gfx1250 `st_16x32_padded` bank-conflict padding) reports the inflated
-    // element count via `storage_elems()`. For every non-padded shape this is
-    // exactly `rows*cols`, so non-gfx1250 layouts are byte-identical.
-    template<typename S> static constexpr int storage_for() {
-        if constexpr (requires { S::storage_elems(0); }) return S::storage_elems(rows*cols);
-        else return rows*cols;
-    }
-    static constexpr int storage_elements = storage_for<shape>();
-
-    dtype data[storage_elements]; ///< Raw data storage for the tile.
+    dtype data[rows*cols]; ///< Raw data storage for the tile.
 
     __device__ __forceinline__ static const uint32_t swizzle(int2 coord) {
         return shape::template swizzle<T>(coord);
-    }
-
-    /// @brief Row-major flat index -> subtile-major flat index (subtiles row-major).
-    __device__ __host__ __forceinline__ static constexpr int subtile_flat(int flat) {
-        constexpr int sub_rows     = shape::rows;
-        constexpr int sub_cols     = shape::cols;
-        constexpr int sub_elems    = sub_rows * sub_cols;
-        constexpr int subs_per_row = cols / sub_cols;
-        const int subtile_id = flat / sub_elems;
-        const int local_idx  = flat % sub_elems;
-        const int local_row  = local_idx / sub_cols;
-        const int local_col  = local_idx % sub_cols;
-        const int sub_r      = subtile_id / subs_per_row;
-        const int sub_c      = subtile_id % subs_per_row;
-        return sub_r * sub_rows * cols
-             + sub_c * sub_cols
-             + local_row * cols
-             + local_col;
-    }
-
-    /// @brief Pad a subtile-major flat index (identity for size-preserving shapes).
-    __device__ __host__ __forceinline__ static constexpr int padded(int subtile_major_flat) {
-        if constexpr (requires { shape::padded(0); }) return shape::padded(subtile_major_flat);
-        else return subtile_major_flat;
-    }
-
-    /// @brief Row-major flat index -> physical (padded) LDS element offset.
-    __device__ __host__ __forceinline__ static constexpr int lds_offset(int flat) {
-        return padded(subtile_flat(flat));
     }
 
     // vector types

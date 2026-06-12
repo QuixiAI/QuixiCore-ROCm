@@ -11,4 +11,3 @@
 #include "register/register.cuh"
 #include "shared/shared.cuh"
 #include "memory/memory.cuh"
-
