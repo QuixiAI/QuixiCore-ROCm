@@ -111,17 +111,6 @@ __device__ void llvm_amdgcn_raw_buffer_store_b64(uint64_t vdata, i32x4 srsrc, ui
 __device__ void llvm_amdgcn_raw_buffer_store_b128(__uint128_t vdata, i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
     __asm("llvm.amdgcn.raw.buffer.store.i128");
 
-using as3_uint32_ptr = uint32_t __attribute__((address_space(3)))*;
-using int32x4_t = int32_t __attribute__((ext_vector_type(4)));
-
-extern "C" __device__ void 
-llvm_amdgcn_raw_buffer_load_lds(int32x4_t rsrc,
-                                as3_uint32_ptr lds_ptr,
-                                int size,
-                                int voffset, 
-                                int soffset, 
-                                int offset,  // does not change (0); instruction offset
-                                int aux) __asm("llvm.amdgcn.raw.buffer.load.lds"); // cache coherency
 
 /* ----------   To prevent generic addressing  ---------- */
 
