@@ -36,4 +36,17 @@ kernels/gemm/bf16fp32/gfx1250/*.sh
 kernels/gemm/bf16fp32/gfx1250/*.sbatch
 kernels/gemm/bf16fp32/gfx1250/*.out
 
+# Local reference source mirrors.
+.reference/
+
+# Local environments and editor files.
+.venv/
+.env
+.env.*
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
 !CMakeLists.txt
