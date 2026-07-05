@@ -1,4 +1,4 @@
-# HipKittens
+# QuixiCore-ROCm
 
 HipKittens is a repository in the ThunderKittens cinematic universe! This work provides minimal, opinionated C++ embedded programming primitives to help you write speedy AMD AI kernels. HipKittens is built from the hardware up: we do what the silicon tells us. 
 
