@@ -1,10 +1,20 @@
-# QuixiCore-ROCm
+# QuixiCore ROCm
 
-HipKittens is a repository in the ThunderKittens cinematic universe! This work provides minimal, opinionated C++ embedded programming primitives to help you write speedy AMD AI kernels. HipKittens is built from the hardware up: we do what the silicon tells us. 
+QuixiCore ROCm is the AMD ROCm implementation of the QuixiCore kernel library.
+
+It is a standalone native implementation for AMD CDNA2, CDNA3, and CDNA4 accelerators. It shares no implementation code with the other QuixiCore backends.
+
+It implements the contract defined by [QuixiAI/QuixiCore](https://github.com/QuixiAI/QuixiCore): the same operation names, quant formats, correctness expectations, benchmark methodology, and public library identity as the other QuixiCore backends.
+
+**Native implementations. Shared contract. No shared code.**
+
+## Origin And Focus
+
+This repository is the [QuixiAI](https://github.com/QuixiAI) ROCm backend for QuixiCore, forked from [HipKittens](https://github.com/HazyResearch/HipKittens). It provides minimal, opinionated C++ embedded programming primitives to help you write speedy AMD AI kernels. The implementation is built from the hardware up: we do what the silicon tells us.
 
 <div align="center" >
-    <img src="assets/hipkittens.png" height=250 alt="HipKittens logo" style="margin-bottom:px"/> 
-      <p><em>HipKittens surfing the ~wave~ (not warp).</em></p>
+    <img src="assets/hipkittens.png" height=250 alt="QuixiCore ROCm logo" style="margin-bottom:px"/> 
+      <p><em>Native AMD ROCm kernels for CDNA accelerators.</em></p>
 </div>
 
 <br>
@@ -30,9 +40,9 @@ We support CDNA3 and CDNA 4.
 
 ```bash
 # clone the repo
-git clone git@github.com:HazyResearch/HipKittens.git
+git clone git@github.com:QuixiAI/QuixiCore-ROCm.git
 **or**
-git clone https://github.com/HazyResearch/HipKittens.git
+git clone https://github.com/QuixiAI/QuixiCore-ROCm.git
 
 # For MI350X and MI355X with gfx950 arch:
 # obtain an amd docker using docker pull or podman pull
@@ -74,7 +84,7 @@ podman run -it \
     bash
 
 # set the environment variables
-cd HipKittens/
+cd QuixiCore-ROCm/
 source env.src
 
 # install aiter (baseline kernels)
@@ -88,7 +98,7 @@ python3 setup.py develop
 We provide unit tests for you to optionally test the correctness of library functions. 
 
 ```bash
-cd HipKittens/tests/unit
+cd QuixiCore-ROCm/tests/unit
 make -j64
 ```
 
@@ -122,7 +132,7 @@ python test_python.py
 ```
 
 - Modify the ```ATTN_N``` sequence length (e.g., 1024, 2048, 4096, 8192), ```ATTN_H``` query heads and ```ATTN_H_KV``` key value heads (e.g., 16 and 16 for MHA), ```ATTN_D``` head dimension (i.e., 64 or 128) in the Makefile and test_python.py file to try other settings.
-- Use the same process for [gqa_causal](https://github.com/HazyResearch/HipKittens/tree/main/kernels/attn/gqa_causal).
+- Use the same process for [gqa_causal](https://github.com/QuixiAI/QuixiCore-ROCm/tree/main/kernels/attn/gqa_causal).
 
 3. **Attention backwards (MHA, GQA, Causal, Non-causal, Head dim 128 / 64)**
 
@@ -135,7 +145,7 @@ python test_python.py
 ```
 
 - Modify the settings in the same way as stated above for forwards.
-- Try [gqa_causal_backwards](https://github.com/HazyResearch/HipKittens/tree/main/kernels/attn/gqa_causal_backwards).
+- Try [gqa_causal_backwards](https://github.com/QuixiAI/QuixiCore-ROCm/tree/main/kernels/attn/gqa_causal_backwards).
 
 4. **Memory bound**
 
@@ -162,17 +172,17 @@ Potential issues:
 
 ## Benchmarking
 
-Under [HipKittens/analysis](https://github.com/HazyResearch/HipKittens/tree/main/analysis) we provide scripts and instructions to benchmark all the HK kernels from our paper. This will sweep over different dimensions and settings, and we provide plotting scripts. 
+Under [QuixiCore ROCm analysis](https://github.com/QuixiAI/QuixiCore-ROCm/tree/main/analysis) we provide scripts and instructions to benchmark all the kernels from our paper. This will sweep over different dimensions and settings, and we provide plotting scripts. 
 
-**Note:** We also provide the instructions to reproduce our baselines (Triton, CK, HipBLASLT, Mojo, etc.) in [HipKittens/analysis/baselines](https://github.com/HazyResearch/HipKittens/tree/main/analysis/baselines)! As these are constantly evolving frameworks, we remind that our results are collected in November 2025.
+**Note:** We also provide the instructions to reproduce our baselines (Triton, CK, HipBLASLT, Mojo, etc.) in [QuixiCore ROCm analysis/baselines](https://github.com/QuixiAI/QuixiCore-ROCm/tree/main/analysis/baselines)! As these are constantly evolving frameworks, we remind that our results are collected in November 2025.
 
 ## Training
 
-Under [HipKittens/training](https://github.com/HazyResearch/HipKittens/tree/main/training) we provide instructions to train either BERT or Llama models using HipKittens attention kernels, AITER kernels, or PyTorch kernels. These are lightweight. Run them within the AMD Docker.
+Under [QuixiCore ROCm training](https://github.com/QuixiAI/QuixiCore-ROCm/tree/main/training) we provide instructions to train either BERT or Llama models using QuixiCore ROCm attention kernels, AITER kernels, or PyTorch kernels. These are lightweight. Run them within the AMD Docker.
 
 ## Resources
 
-We provide resources for profiling kernels, dockers, and HipKittens in [HipKittens/docs](https://github.com/HazyResearch/HipKittens/tree/main/docs). Contribute to our [onboarding documents](https://docs.google.com/document/d/15-Zvf6e0NLX1si4ml4sUOWCDlXNMtOWKiuo6CKZMEYA/edit?usp=sharing).
+We provide resources for profiling kernels, dockers, and QuixiCore ROCm in [QuixiCore ROCm docs](https://github.com/QuixiAI/QuixiCore-ROCm/tree/main/docs). Contribute to our [onboarding documents](https://docs.google.com/document/d/15-Zvf6e0NLX1si4ml4sUOWCDlXNMtOWKiuo6CKZMEYA/edit?usp=sharing).
 
 ### Get in touch!
 
