@@ -27,11 +27,11 @@ families:
     paths:
       - kernels/attention
   linear_attention:
-    status: planned
+    status: partial
     paths:
       - kernels/linear_attention
   ssm:
-    status: planned
+    status: partial
     paths:
       - kernels/ssm
   matmul:
@@ -43,7 +43,7 @@ families:
     paths:
       - kernels/quantization
   moe:
-    status: planned
+    status: partial
     paths:
       - kernels/moe
   sampling:
@@ -51,7 +51,7 @@ families:
     paths:
       - kernels/sampling
   serving:
-    status: planned
+    status: partial
     paths:
       - kernels/serving
   optimizers:
@@ -94,15 +94,175 @@ operations:
     status: implemented
     path: kernels/activations/softmax
     variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/activations/softmax/variants/rocm_cdna3
       - name: rocm_cdna4
         status: implemented
         path: kernels/activations/softmax/variants/rocm_cdna4
+
+  elementwise:
+    family: activations
+    status: imported
+    path: kernels/activations/elementwise
+    notes: >-
+      Port of QuixiCore-CUDA/kernels/elementwise (rms/layernorm fwd+bwd,
+      add_norm +fp8-e4m3 epilogues, softmax, gelu, glu x6, dropout,
+      cross_entropy +_mw, embedding +2 bwd +multimodal, hadamard, adamw, add).
+      Plain-CUDA tm_* kernels hipified with CDNA3 warp adaptations (mask-free
+      __shfl_*). 56/56 fp64-oracle checks pass on MI300X.
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/activations/elementwise/variants/rocm_cdna3
+
+  qgemv:
+    family: quantization
+    status: imported
+    path: kernels/quantization/qgemv
+    notes: >-
+      Dequant + fp16/int8 GEMV + runtime-quant port of
+      QuixiCore-CUDA/kernels/quant. 29/29 GGUF/MX/FP/BitNet formats dequant
+      byte-exact vs quant.py + GEMV pass; W8A8/W2A8 int8 GEMV pass;
+      per-token/per-tensor int8+fp8 quantize pass on MI300X.
+      __dp4a -> __builtin_amdgcn_sdot4 (gfx942 V_DOT4). Tensor-core qgemm
+      (tm_qmm.cuh PTX mma.sync) deferred to the MFMA pass.
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/quantization/qgemv/variants/rocm_cdna3
+
+  moe:
+    family: moe
+    status: imported
+    path: kernels/moe
+    notes: >-
+      Port of QuixiCore-CUDA/kernels/moe (routing, histogram/scan, scatter/
+      gather, grouped GEMM, end-to-end MoE MLP). 8/8 checks pass on MI300X.
+      moe_quant (fp8/nvfp4 experts) depends on tensor-core mma16816 and is
+      ported with the MFMA pass.
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/moe/variants/rocm_cdna3
+
+  serving:
+    family: serving
+    status: imported
+    path: kernels/serving
+    notes: >-
+      Port of QuixiCore-CUDA/kernels/serving. All 12 self-checking harnesses
+      pass on MI300X: paged attention (v1/v2/cascade), GQA-staged, quantized-KV
+      decode, variable-length prefill, MLA decode, fused RoPE-on-KV, KV
+      scatter/gather + sliding window, sampling, logit processors, beam-cache
+      reindex, speculative-decode tree, EAGLE, sparse serving. hipify +
+      mask-free __shfl_* + __dp4a->sdot4 (fp8-KV path).
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/serving/variants/rocm_cdna3
+
+  lm_head:
+    family: quantization
+    status: imported
+    path: kernels/quantization/lm_head
+    notes: >-
+      Vocab-projection argmax/categorical sampling over fp16 and quantized
+      weights (scalar GEMV-argmax). 20/20 token-match checks pass on MI300X.
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/quantization/lm_head/variants/rocm_cdna3
+
+  turboquant:
+    family: quantization
+    status: imported
+    path: kernels/quantization/turboquant
+    notes: >-
+      Turboquant (FWHT rotate, permute_cols, moe_lora_align) + mixed-format
+      primitives (fp4/e8m0 roundtrip, scan, nvfp4 swizzle). Plain ports; ALL
+      PASS on MI300X.
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/quantization/turboquant/variants/rocm_cdna3
+
+  moe_quant:
+    family: moe
+    status: imported
+    path: kernels/moe
+    notes: >-
+      Quantized MoE grouped GEMMs (fp8/nvfp4/wna16 int4/int8) rewritten to gfx942
+      MFMA via tm_qmm_mfma.cuh, plus plain silu/quant/routing kernels. ALL PASS
+      vs fp64 on MI300X.
+    variants:
+      - name: rocm_cdna3_quant
+        status: imported
+        path: kernels/moe/variants/rocm_cdna3_quant
+
+  hedgehog:
+    family: linear_attention
+    status: imported
+    path: kernels/linear_attention/hedgehog
+    notes: Hybrid dual-softmax-feature linear + block-terraced windowed-exact attention. vs fp64 PASS ~0.16%.
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/linear_attention/hedgehog/variants/rocm_cdna3
+
+  fftconv:
+    family: ssm
+    status: imported
+    path: kernels/ssm/fftconv
+    notes: FFT convolution as direct circular convolution. vs fp64 PASS (exact).
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/ssm/fftconv/variants/rocm_cdna3
+
+  based:
+    family: linear_attention
+    status: imported
+    path: kernels/linear_attention/based
+    notes: 2nd-order Taylor-feature causal linear attention. vs fp64 oracle PASS ~0.14% on MI300X.
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/linear_attention/based/variants/rocm_cdna3
+
+  flux:
+    family: matmul
+    status: imported
+    path: kernels/matmul/flux
+    notes: Dense bf16 matmul + fused gelu/gate epilogue via MFMA. ALL PASS vs fp64 on MI300X.
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/matmul/flux/variants/rocm_cdna3
+
+  qgemm:
+    family: quantization
+    status: imported
+    path: kernels/quantization/qgemm
+    notes: >-
+      Tensor-core quantized GEMM. CUDA PTX mma.sync.m16n8k16 rewritten to gfx942
+      v_mfma_f32_16x16x16_f16 (tm_qmm_mfma.cuh) on a 64-wide wavefront. qgemm
+      (weight-only, fragment + full-dequant + K-split) 58/58 PASS and qflux
+      (fused gelu+bias) 29/29 PASS vs golden on MI300X. lm_head/moe_quant reuse
+      this primitive (pending).
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/quantization/qgemm/variants/rocm_cdna3
 
   rotary:
     family: attention
     status: implemented
     path: kernels/attention/rotary
     variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/attention/rotary/variants/rocm_cdna3
       - name: rocm_cdna4
         status: implemented
         path: kernels/attention/rotary/variants/rocm_cdna4
@@ -112,6 +272,10 @@ operations:
     status: implemented
     path: kernels/attention/gqa
     variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/attention/gqa/variants/rocm_cdna3
+        notes: Correct CDNA3 online-softmax forward; validated vs PyTorch SDPA (~0.15%).
       - name: rocm_cdna4
         status: implemented
         path: kernels/attention/gqa/variants/rocm_cdna4
@@ -121,6 +285,10 @@ operations:
     status: implemented
     path: kernels/attention/gqa_backward
     variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/attention/gqa_backward/variants/rocm_cdna3
+        notes: Correct CDNA3 backward (dQ/dK/dV); validated vs fp64 analytic oracle.
       - name: rocm_cdna4
         status: implemented
         path: kernels/attention/gqa_backward/variants/rocm_cdna4
@@ -130,6 +298,10 @@ operations:
     status: implemented
     path: kernels/attention/gqa_causal
     variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/attention/gqa_causal/variants/rocm_cdna3
+        notes: Correct CDNA3 causal online-softmax forward; validated vs SDPA is_causal (~0.14%).
       - name: rocm_cdna4
         status: implemented
         path: kernels/attention/gqa_causal/variants/rocm_cdna4
@@ -139,6 +311,10 @@ operations:
     status: implemented
     path: kernels/attention/gqa_causal_backward
     variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/attention/gqa_causal_backward/variants/rocm_cdna3
+        notes: Correct CDNA3 backward (dQ/dK/dV); validated vs fp64 analytic oracle.
       - name: rocm_cdna4
         status: implemented
         path: kernels/attention/gqa_causal_backward/variants/rocm_cdna4
@@ -181,6 +357,10 @@ operations:
     status: implemented
     path: kernels/matmul/mxfp8
     variants:
+      - name: rocm_cdna3
+        status: capability_gated
+        path: kernels/matmul/mxfp8/variants/rocm_cdna3
+        notes: CDNA4 scaled-MFMA MXFP8 path does not map directly to gfx942.
       - name: rocm_cdna4_4wave
         status: implemented
         path: kernels/matmul/mxfp8/variants/rocm_cdna4/MXFP8_4wave
@@ -193,6 +373,9 @@ operations:
     status: implemented
     path: kernels/matmul/scaled_matmul
     variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/matmul/scaled_matmul/variants/rocm_cdna3
       - name: rocm_cdna4
         status: implemented
         path: kernels/matmul/scaled_matmul/variants/rocm_cdna4
@@ -200,3 +383,4 @@ operations:
 notes:
   - Normal build and test discovery must filter by `variants/rocm_<target>` and skip archive directories.
   - Upstream architecture branches are import sources only; supported target variants live side by side in main.
+  - CUDA-to-CDNA3 parity status is tracked in `docs/cuda-to-cdna3-port-status.md`.

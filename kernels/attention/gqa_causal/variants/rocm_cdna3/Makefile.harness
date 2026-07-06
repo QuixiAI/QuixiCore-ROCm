@@ -1,0 +1,13 @@
+# Standalone correctness harness for the CDNA3 GQA fwd kernel (no torch/pyutils).
+# Currently REPRODUCES the CDNA4-geometry failure on gfx942 (see README.cdna3.md).
+HIPCC ?= /opt/rocm/bin/hipcc
+INC ?= -I../../../../../include -I/opt/rocm/include/hip
+FLAGS ?= -std=c++20 -O3 --offload-arch=gfx942 -DKITTENS_CDNA3 -DHIP_ENABLE_WARP_SYNC_BUILTINS -ffast-math
+SHAPE ?= -DATTN_B=1 -DATTN_H=8 -DATTN_H_KV=2 -DATTN_N=256 -DATTN_D=128 -DATTN_CAUSAL=1
+harness.out: harness.cpp attn_kernel.cuh
+	$(HIPCC) $(FLAGS) $(INC) $(SHAPE) harness.cpp -o harness.out
+test: harness.out
+	HIP_VISIBLE_DEVICES=0 ./harness.out
+clean:
+	rm -f harness.out *.o
+.PHONY: test clean
