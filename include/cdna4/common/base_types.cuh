@@ -349,11 +349,15 @@ template<> struct convertor<float2, bf16_2> {
 
 template<> struct convertor<bf16_2, float2> {
     static __host__ __device__ inline bf16_2 convert(const float2 &u) {
+#if defined(KITTENS_CDNA3)
+        return __float22bfloat162_rn(u);
+#else
         uint32_t result;
         asm volatile("v_cvt_pk_bf16_f32 %0, %1, %2" 
                      : "=v"(result) 
                      : "v"(u.x), "v"(u.y));
         return *reinterpret_cast<bf16_2*>(&result);
+#endif
     }
 };
 

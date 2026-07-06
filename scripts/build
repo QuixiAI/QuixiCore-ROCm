@@ -1,30 +1,240 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-target="${1:-help}"
-if [ $# -gt 0 ]; then
-  shift
+usage() {
+  cat <<'USAGE'
+Usage: scripts/build [--arch cdna3|cdna4|udna1] <target> [make args...]
+
+Targets:
+  kernels          Build kernel Makefiles under variants/rocm_<arch>
+  all              Alias for kernels
+  tests            Build primitive tests for the selected arch
+  tests-cdna3      Build CDNA3 primitive tests
+  tests-cdna4      Build CDNA4 primitive tests
+  tests-udna1      Build UDNA1 primitive tests
+  <path>           Build a kernel directory or subtree
+
+If --arch is omitted, the script detects the local ROCm GPU target from
+rocminfo. Archives are never included in kernel discovery.
+USAGE
+}
+
+arch=""
+target=""
+make_args=()
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help|help)
+      usage
+      exit 0
+      ;;
+    --arch)
+      if [ "$#" -lt 2 ]; then
+        echo "--arch requires a value" >&2
+        exit 2
+      fi
+      arch="$2"
+      shift 2
+      ;;
+    --arch=*)
+      arch="${1#--arch=}"
+      shift
+      ;;
+    *)
+      if [ -z "${target}" ]; then
+        target="$1"
+      else
+        make_args+=("$1")
+      fi
+      shift
+      ;;
+  esac
+done
+
+if [ -z "${target}" ]; then
+  usage
+  exit 0
 fi
 
+lower() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+normalize_arch() {
+  local raw
+  raw="$(lower "$1")"
+  case "${raw}" in
+    cdna2|rocm_cdna2|gfx90a)
+      echo "cdna2"
+      ;;
+    cdna3|rocm_cdna3|gfx940|gfx941|gfx942)
+      echo "cdna3"
+      ;;
+    cdna4|rocm_cdna4|gfx950|mi350x|mi355x)
+      echo "cdna4"
+      ;;
+    udna1|rocm_udna1|gfx1250)
+      echo "udna1"
+      ;;
+    *)
+      echo "${raw}"
+      ;;
+  esac
+}
+
+detect_arch() {
+  local gfx=""
+  if command -v rocminfo >/dev/null 2>&1; then
+    gfx="$(rocminfo 2>/dev/null | awk '/Name:[[:space:]]+gfx[[:alnum:]]+/ {print $2; exit}')"
+  fi
+
+  if [ -n "${gfx}" ]; then
+    normalize_arch "${gfx}"
+  else
+    echo "cdna3"
+  fi
+}
+
+arch_from_path() {
+  case "$1" in
+    *variants/rocm_cdna2*) echo "cdna2" ;;
+    *variants/rocm_cdna3*) echo "cdna3" ;;
+    *variants/rocm_cdna4*) echo "cdna4" ;;
+    *variants/rocm_udna1*) echo "udna1" ;;
+    *) return 1 ;;
+  esac
+}
+
+resolve_arch() {
+  local path="${1:-}"
+  if [ -n "${arch}" ]; then
+    normalize_arch "${arch}"
+  elif [ -n "${path}" ] && arch_from_path "${path}" >/dev/null 2>&1; then
+    arch_from_path "${path}"
+  else
+    detect_arch
+  fi
+}
+
+gpu_target() {
+  case "$1" in
+    cdna3) echo "CDNA3" ;;
+    cdna4) echo "CDNA4" ;;
+    udna1) echo "UDNA1" ;;
+    *)
+      echo "Unsupported build arch '$1'. Supported: cdna3, cdna4, udna1" >&2
+      exit 2
+      ;;
+  esac
+}
+
+variant_prefix() {
+  case "$1" in
+    cdna3) echo "rocm_cdna3" ;;
+    cdna4) echo "rocm_cdna4" ;;
+    udna1) echo "rocm_udna1" ;;
+    *)
+      echo "Unsupported build arch '$1'. Supported: cdna3, cdna4, udna1" >&2
+      exit 2
+      ;;
+  esac
+}
+
+find_kernel_makefiles() {
+  local root="$1"
+  local selected_arch="$2"
+  local variant
+  variant="$(variant_prefix "${selected_arch}")"
+  find "${root}" \
+    -path '*/archive/*' -prune -o \
+    -type f -path "*/variants/${variant}*/Makefile" -print | sort
+}
+
+build_makefiles() {
+  local selected_arch="$1"
+  shift
+  local makefiles=("$@")
+  local mf dir
+  local gpu
+  gpu="$(gpu_target "${selected_arch}")"
+
+  if [ "${#makefiles[@]}" -eq 0 ]; then
+    echo "No kernel Makefiles found for arch '${selected_arch}'" >&2
+    exit 1
+  fi
+
+  for mf in "${makefiles[@]}"; do
+    dir="${mf%/Makefile}"
+    echo "==> ${dir}"
+    make -C "${dir}" "GPU_TARGET=${gpu}" "${make_args[@]}"
+  done
+}
+
+build_kernel_tree() {
+  local root="$1"
+  local selected_arch
+  selected_arch="$(resolve_arch "${root}")"
+  mapfile -t makefiles < <(find_kernel_makefiles "${root}" "${selected_arch}")
+  build_makefiles "${selected_arch}" "${makefiles[@]}"
+}
+
+build_path() {
+  local path="$1"
+  local selected_arch
+  selected_arch="$(resolve_arch "${path}")"
+
+  if [ -f "${path}/Makefile" ]; then
+    echo "==> ${path}"
+    make -C "${path}" "GPU_TARGET=$(gpu_target "${selected_arch}")" "${make_args[@]}"
+  else
+    build_kernel_tree "${path}"
+  fi
+}
+
+build_tests_for_arch() {
+  local selected_arch="$1"
+  case "${selected_arch}" in
+    cdna3)
+      make -C tests/unit/cdna4 GPU_TARGET=CDNA3 "${make_args[@]}"
+      ;;
+    cdna4)
+      make -C tests/unit/cdna4 GPU_TARGET=CDNA4 "${make_args[@]}"
+      ;;
+    udna1)
+      make -C tests/unit/udna1 GPU_TARGET=UDNA1 "${make_args[@]}"
+      ;;
+    *)
+      echo "Unsupported test arch '${selected_arch}'" >&2
+      exit 2
+      ;;
+  esac
+}
+
 case "${target}" in
-  help)
-    echo "Usage: scripts/build <target>"
-    echo "Targets:"
-    echo "  tests-cdna4      Build CDNA4 primitive tests"
-    echo "  tests-udna1      Build UDNA1 primitive tests"
-    echo "  <path>           Run make in a kernel directory, for example kernels/gemm/bf16fp32"
+  kernels|all)
+    build_kernel_tree "kernels"
+    ;;
+  tests)
+    build_tests_for_arch "$(resolve_arch)"
+    ;;
+  tests-cdna3)
+    arch="cdna3"
+    build_tests_for_arch "cdna3"
     ;;
   tests-cdna4)
-    make -C tests/unit/cdna4 "$@"
+    arch="cdna4"
+    build_tests_for_arch "cdna4"
     ;;
   tests-udna1)
-    make -C tests/unit/udna1 "$@"
+    arch="udna1"
+    build_tests_for_arch "udna1"
     ;;
   *)
     if [ -d "${target}" ]; then
-      make -C "${target}" "$@"
+      build_path "${target}"
     elif [ -d "kernels/${target}" ]; then
-      make -C "kernels/${target}" "$@"
+      build_path "kernels/${target}"
     else
       echo "Unknown build target: ${target}" >&2
       exit 2

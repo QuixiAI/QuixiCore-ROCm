@@ -586,6 +586,110 @@ __device__ static inline void div(T &dst, const T &lhs, const U &rhs) {
     bin_map<base_ops::div, T>(dst, lhs, rhs);
 }
 
+// HIP clang can treat constrained helper overloads as ambiguous for dependent
+// rt/rv aliases. Concrete rt<> overloads keep templated kernels deterministic.
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape>
+__device__ static inline void zero(rt<_T, _rows, _cols, layout, shape> &dst) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    unary_map<base_ops::zero, T>(dst, dst);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape>
+__device__ static inline void ones(rt<_T, _rows, _cols, layout, shape> &dst) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    unary_map<base_ops::ones, T>(dst, dst);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape>
+__device__ static inline void pos_infty(rt<_T, _rows, _cols, layout, shape> &dst) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    unary_map<base_ops::pos_infty, T>(dst, dst);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape>
+__device__ static inline void neg_infty(rt<_T, _rows, _cols, layout, shape> &dst) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    unary_map<base_ops::neg_infty, T>(dst, dst);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape>
+__device__ static inline void exp(rt<_T, _rows, _cols, layout, shape> &dst, const rt<_T, _rows, _cols, layout, shape> &src) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    unary_map<base_ops::exp, T>(dst, src);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape>
+__device__ static inline void exp2(rt<_T, _rows, _cols, layout, shape> &dst, const rt<_T, _rows, _cols, layout, shape> &src) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    unary_map<base_ops::exp2, T>(dst, src);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape>
+__device__ static inline void log(rt<_T, _rows, _cols, layout, shape> &dst, const rt<_T, _rows, _cols, layout, shape> &src) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    unary_map<base_ops::log, T>(dst, src);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape>
+__device__ static inline void log2(rt<_T, _rows, _cols, layout, shape> &dst, const rt<_T, _rows, _cols, layout, shape> &src) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    unary_map<base_ops::log2, T>(dst, src);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape>
+__device__ static inline void abs(rt<_T, _rows, _cols, layout, shape> &dst, const rt<_T, _rows, _cols, layout, shape> &src) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    unary_map<base_ops::abs, T>(dst, src);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape>
+__device__ static inline void relu(rt<_T, _rows, _cols, layout, shape> &dst, const rt<_T, _rows, _cols, layout, shape> &src) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    unary_map<base_ops::relu, T>(dst, src);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape, typename U>
+__device__ static inline void copy(rt<_T, _rows, _cols, layout, shape> &dst, const U &src) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    bin_map<base_ops::copy2, T>(dst, src);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape, typename U>
+__device__ static inline void max(rt<_T, _rows, _cols, layout, shape> &dst, const rt<_T, _rows, _cols, layout, shape> &lhs, const U &rhs) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    bin_map<base_ops::max, T>(dst, lhs, rhs);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape, typename U>
+__device__ static inline void min(rt<_T, _rows, _cols, layout, shape> &dst, const rt<_T, _rows, _cols, layout, shape> &lhs, const U &rhs) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    bin_map<base_ops::min, T>(dst, lhs, rhs);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape, typename U>
+__device__ static inline void add(rt<_T, _rows, _cols, layout, shape> &dst, const rt<_T, _rows, _cols, layout, shape> &lhs, const U &rhs) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    bin_map<base_ops::sum, T>(dst, lhs, rhs);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape, typename U>
+__device__ static inline void sub(rt<_T, _rows, _cols, layout, shape> &dst, const rt<_T, _rows, _cols, layout, shape> &lhs, const U &rhs) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    bin_map<base_ops::sub, T>(dst, lhs, rhs);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape, typename U>
+__device__ static inline void mul(rt<_T, _rows, _cols, layout, shape> &dst, const rt<_T, _rows, _cols, layout, shape> &lhs, const U &rhs) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    bin_map<base_ops::mul, T>(dst, lhs, rhs);
+}
+
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all layout, ducks::rt_shape::all shape, typename U>
+__device__ static inline void div(rt<_T, _rows, _cols, layout, shape> &dst, const rt<_T, _rows, _cols, layout, shape> &lhs, const U &rhs) {
+    using T = rt<_T, _rows, _cols, layout, shape>;
+    bin_map<base_ops::div, T>(dst, lhs, rhs);
+}
+
 /**
  * @brief Adds row values to each row of a tile.
  *

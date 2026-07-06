@@ -56,6 +56,7 @@ __device__ static inline void row_reduce(V &row_accum, const T &src, const V &sr
         }
         RT accum_single = op::template op<RT>(accum_packed.x, accum_packed.y);
 
+#if defined(KITTENS_CDNA4)
         if constexpr (std::is_same_v<RT, bf16> && T::base_tile_rows == 32) {
             uint2_t res = __builtin_amdgcn_permlane32_swap(__bfloat16_as_ushort(accum_single), __bfloat16_as_ushort(accum_single), false, true);
             accum_single = op::template op<RT>(__ushort_as_bfloat16(res.x), __ushort_as_bfloat16(res.y));
@@ -73,6 +74,13 @@ __device__ static inline void row_reduce(V &row_accum, const T &src, const V &sr
 
             accum_single = __shfl(accum_single, leader);
         }
+#else
+        for (int shift = max_shift; shift > 0; shift--) {
+            accum_single = op::template op<RT>(accum_single, __shfl_down(accum_single, shift * T::base_tile_rows));
+        }
+
+        accum_single = __shfl(accum_single, leader);
+#endif
 
         if(reset) {
             row_accum[i][0] = accum_single;
@@ -282,6 +290,7 @@ __device__ static inline void col_reduce(V &col_accum, const T &src, const V &sr
         //   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
         //           the row 0 and 1 of the copy of acc
         //   step 2: apply reduction to the result values to get final result
+#if defined(KITTENS_CDNA4)
         if constexpr (std::is_same_v<RT, bf16> && T::base_tile_cols == 32) {
             uint2_t res = __builtin_amdgcn_permlane32_swap(__bfloat16_as_ushort(accum_single), __bfloat16_as_ushort(accum_single), false, true);
             accum_single = op::template op<RT>(__ushort_as_bfloat16(res.x), __ushort_as_bfloat16(res.y));
@@ -299,6 +308,13 @@ __device__ static inline void col_reduce(V &col_accum, const T &src, const V &sr
 
             accum_single = __shfl(accum_single, leader);
         }
+#else
+        for (int shift = max_shift; shift > 0; shift--) {
+            accum_single = op::template op<RT>(accum_single, __shfl_down(accum_single, shift * T::base_tile_cols));
+        }
+
+        accum_single = __shfl(accum_single, leader);
+#endif
 
         if(reset) {
             col_accum[j][0] = accum_single;

@@ -146,25 +146,82 @@ profiling buckets:
 
 ## Operation Layout
 
-Prefer one directory per operation:
+Use one directory per contract operation. The filesystem rule is semantic
+first, target variant second: do not create branch-only, architecture-first, or
+upstream-layout-first kernel trees.
 
 ```text
 kernels/<family>/<operation>/
   README.md
-  include/
-  src/
+  common/
+    include/
+    src/
   variants/
     rocm_cdna2/
+      include/
+      src/
+      tests/
+      bench/
     rocm_cdna3/
+      include/
+      src/
+      tests/
+      bench/
     rocm_cdna4/
+      include/
+      src/
+      tests/
+      bench/
     rocm_ck/
+      include/
+      src/
+      tests/
+      bench/
     rocm_rocblas/
+      include/
+      src/
+      tests/
+      bench/
   tests/
   bench/
 ```
 
-For small operations, direct `.hip`, `.cpp`, or `.cu` compatibility files under
-the family are acceptable until there is more than one implementation.
+`common/` is for target-independent operation code only. Anything that depends
+on CDNA generation, `gfx*` ISA, LDS size, MFMA shape, direct-to-LDS instruction
+availability, scheduler strategy, or launch geometry belongs under a variant
+directory.
+
+For very small operations, direct `.hip`, `.cpp`, or `.cu` files under the
+operation directory are acceptable only when they are genuinely
+target-independent. As soon as an operation has more than one architecture- or
+provider-specific implementation, move all target-specific source into
+`variants/`.
+
+Branches are not the architecture boundary. A backend repository should keep
+all supported ROCm target variants in `main` side by side. Upstream
+architecture branches may be import sources, but the QuixiCore repo layout
+should make CDNA2/CDNA3/CDNA4 variants coexist in one checkout.
+
+## Target-Specific Internals
+
+Public backend headers remain under `include/quixicore/rocm/`. HIP primitive
+libraries or low-level implementation headers that differ by CDNA generation
+should use explicit internal target directories, for example:
+
+```text
+include/internal/rocm/
+  common/
+  cdna2/
+  cdna3/
+  cdna4/
+```
+
+During migration, existing native include trees such as `include/cdna3/`,
+`include/cdna4/`, and `include/udna1/` may remain as ROCm-specific exceptions,
+but new common-layout work should prefer `include/internal/rocm/<target>/`.
+
+Operation variants may include these internal headers, but contract-facing
+headers should not expose target-specific implementation layouts.
 
 ## Tests And Benchmarks
 
@@ -213,6 +270,10 @@ the CUDA, Metal, ROCm, XPU, and Gaudi bindings deliberately.
 - Keep PyTorch, Python, and extension glue in `bindings/`.
 - Keep HIP, CK, rocBLAS, rocWMMA, RCCL, and architecture-specific choices under
   operation variants.
+- Keep all supported ROCm architecture variants in the repo; do not depend on
+  one branch per CDNA generation.
+- Build, test, and benchmark entrypoints must filter variants by the selected
+  ROCm target and must not try to compile unrelated architecture variants.
 - Use `collectives/` for multi-GPU ROCm/RCCL extensions; mark them capability
   gated in `.quixicore/kernels.yaml`.
 - If an operation has no meaningful ROCm implementation, mark it unsupported in

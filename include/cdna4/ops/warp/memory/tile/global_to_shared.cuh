@@ -10,12 +10,52 @@
 
 namespace kittens {
 
+template<int axis, ducks::st::all ST, ducks::gl::all GL,
+         ducks::coord::tile COORD = coord<ST>, int N_THREADS = WARP_THREADS>
+__device__ inline void load_register_mediated(ST& dst, const GL& src, const COORD& idx)
+{
+    using T = typename ST::dtype;
+
+    coord<> unit_coord = idx.template unit_coord<axis, 3>();
+    const T* base = (const T*)&src[unit_coord];
+    const int row_stride = src.template stride<axis>();
+
+    for (int elem = threadIdx.x; elem < ST::rows * ST::cols; elem += N_THREADS) {
+        const int elems_per_logical_subtile_row =
+            ST::subtiles_per_row * ST::underlying_subtile_elements;
+        const int subtile_row = elem / elems_per_logical_subtile_row;
+        const int subtile_row_elem = elem % elems_per_logical_subtile_row;
+        const int subtile_col = subtile_row_elem / ST::underlying_subtile_elements;
+        const int subtile_elem = subtile_row_elem % ST::underlying_subtile_elements;
+        const int local_row = subtile_elem / ST::underlying_subtile_cols;
+        const int local_col = subtile_elem % ST::underlying_subtile_cols;
+
+        const uint32_t swizzled_shared_byte_offset = ST::swizzle({local_row, local_col});
+        const int swizzled_global_row =
+            (swizzled_shared_byte_offset / ST::underlying_subtile_row_bytes)
+            + subtile_row * ST::underlying_subtile_rows;
+        const int swizzled_global_col =
+            (swizzled_shared_byte_offset % ST::underlying_subtile_row_bytes) / sizeof(T)
+            + subtile_col * ST::underlying_subtile_cols;
+
+        const int dst_elem =
+            subtile_row * ST::underlying_subtiles_per_row * ST::underlying_subtile_elements
+            + subtile_col * ST::underlying_subtile_elements
+            + subtile_elem;
+
+        dst.data[dst_elem] = base[swizzled_global_row * row_stride + swizzled_global_col];
+    }
+}
+
 template<int axis, bool assume_aligned,
          ducks::st::all ST, ducks::gl::all GL,
          ducks::coord::tile COORD = coord<ST>,
          int N_THREADS = WARP_THREADS>
 __device__ inline void load(ST& dst, const GL& src, const COORD& idx)
 {
+#if defined(KITTENS_CDNA3)
+    load_register_mediated<axis, ST, GL, COORD, N_THREADS>(dst, src, idx);
+#else
     using T = typename ST::dtype;
 
     constexpr int bytes_per_thread = ST::underlying_subtile_bytes_per_thread;
@@ -101,9 +141,10 @@ __device__ inline void load(ST& dst, const GL& src, const COORD& idx)
                 swizzled_global_byte_offset,
                 0, 
                 0, // instruction offset
-                static_cast<int>(coherency::cache_all)); // cache coherency
+            static_cast<int>(coherency::cache_all)); // cache coherency
         }
     }
+#endif
 }
 
 template<ducks::st::all ST, ducks::gl::all GL, ducks::coord::tile COORD=coord<ST>>
@@ -182,6 +223,10 @@ template<int axis, bool assume_aligned,
          int N_THREADS = WARP_THREADS>
 __device__ inline void load(ST& dst, const GL& src, const COORD& idx, const uint32_t* swizzled_offsets)
 {
+#if defined(KITTENS_CDNA3)
+    (void)swizzled_offsets;
+    load_register_mediated<axis, ST, GL, COORD, N_THREADS>(dst, src, idx);
+#else
     using T = typename ST::dtype;
 
     constexpr int bytes_per_thread = ST::underlying_subtile_bytes_per_thread;
@@ -237,9 +282,10 @@ __device__ inline void load(ST& dst, const GL& src, const COORD& idx, const uint
                 swizzled_offsets[memcpy_per_tile],
                 0, 
                 0, // instruction offset
-                static_cast<int>(coherency::cache_all)); // cache coherency
+            static_cast<int>(coherency::cache_all)); // cache coherency
         }
     }
+#endif
 }
 
 template<ducks::st::all ST, ducks::gl::all GL, ducks::coord::tile COORD=coord<ST>>
@@ -262,6 +308,13 @@ __device__ __forceinline__ void load(ST& dst, const GL& src, const COORD& idx,
                                 i32x4 SRD,
                                 const void* base_ptr, const uint32_t lds_base)
 {
+#if defined(KITTENS_CDNA3)
+    (void)swizzled_offsets;
+    (void)SRD;
+    (void)base_ptr;
+    (void)lds_base;
+    load_register_mediated<axis, ST, GL, COORD, N_THREADS>(dst, src, idx);
+#else
     using T = typename ST::dtype;
     static_assert(sizeof(T) == 2 || sizeof(T) == 1, "only supporting 16 and 8-bit dtypes");
 
@@ -311,6 +364,7 @@ __device__ __forceinline__ void load(ST& dst, const GL& src, const COORD& idx,
         // SGPR bump (compiler emits s_add_u32)
         lds_cur += bytes_per_memcpy;
     }
+#endif
 }
 template<ducks::st::all ST, ducks::gl::all GL, ducks::coord::tile COORD=coord<ST>>
 __device__ static inline void load(ST &dst, const GL &src, const COORD &idx, const uint32_t* __restrict__ swizzled_offsets, i32x4 srd, const void* base_ptr, uint32_t lds_base) {

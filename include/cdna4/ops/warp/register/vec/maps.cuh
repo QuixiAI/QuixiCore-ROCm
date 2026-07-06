@@ -290,4 +290,108 @@ __device__ static inline void div(T &dst, const T &lhs, const U &rhs) {
     bin_op<base_ops::div, T>(dst, lhs, rhs);
 }
 
+// HIP clang can treat constrained helper overloads as ambiguous for dependent
+// rt/rv aliases. Concrete rv<> overloads keep templated kernels deterministic.
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout>
+__device__ static inline void zero(rv<_T, _length, _tile_length, shape, layout> &dst) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    unary_op<base_ops::zero, T>(dst, dst);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout>
+__device__ static inline void ones(rv<_T, _length, _tile_length, shape, layout> &dst) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    unary_op<base_ops::ones, T>(dst, dst);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout>
+__device__ static inline void pos_infty(rv<_T, _length, _tile_length, shape, layout> &dst) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    unary_op<base_ops::pos_infty, T>(dst, dst);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout>
+__device__ static inline void neg_infty(rv<_T, _length, _tile_length, shape, layout> &dst) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    unary_op<base_ops::neg_infty, T>(dst, dst);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout>
+__device__ static inline void exp(rv<_T, _length, _tile_length, shape, layout> &dst, const rv<_T, _length, _tile_length, shape, layout> &src) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    unary_op<base_ops::exp, T>(dst, src);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout>
+__device__ static inline void exp2(rv<_T, _length, _tile_length, shape, layout> &dst, const rv<_T, _length, _tile_length, shape, layout> &src) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    unary_op<base_ops::exp2, T>(dst, src);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout>
+__device__ static inline void log(rv<_T, _length, _tile_length, shape, layout> &dst, const rv<_T, _length, _tile_length, shape, layout> &src) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    unary_op<base_ops::log, T>(dst, src);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout>
+__device__ static inline void log2(rv<_T, _length, _tile_length, shape, layout> &dst, const rv<_T, _length, _tile_length, shape, layout> &src) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    unary_op<base_ops::log2, T>(dst, src);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout>
+__device__ static inline void abs(rv<_T, _length, _tile_length, shape, layout> &dst, const rv<_T, _length, _tile_length, shape, layout> &src) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    unary_op<base_ops::abs, T>(dst, src);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout>
+__device__ static inline void relu(rv<_T, _length, _tile_length, shape, layout> &dst, const rv<_T, _length, _tile_length, shape, layout> &src) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    unary_op<base_ops::relu, T>(dst, src);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout, typename U>
+__device__ static inline void copy(rv<_T, _length, _tile_length, shape, layout> &dst, const U &src) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    bin_op<base_ops::copy2, T>(dst, dst, src);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout, typename U>
+__device__ static inline void max(rv<_T, _length, _tile_length, shape, layout> &dst, const rv<_T, _length, _tile_length, shape, layout> &lhs, const U &rhs) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    bin_op<base_ops::max, T>(dst, lhs, rhs);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout, typename U>
+__device__ static inline void min(rv<_T, _length, _tile_length, shape, layout> &dst, const rv<_T, _length, _tile_length, shape, layout> &lhs, const U &rhs) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    bin_op<base_ops::min, T>(dst, lhs, rhs);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout, typename U>
+__device__ static inline void add(rv<_T, _length, _tile_length, shape, layout> &dst, const rv<_T, _length, _tile_length, shape, layout> &lhs, const U &rhs) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    bin_op<base_ops::sum, T>(dst, lhs, rhs);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout, typename U>
+__device__ static inline void sub(rv<_T, _length, _tile_length, shape, layout> &dst, const rv<_T, _length, _tile_length, shape, layout> &lhs, const U &rhs) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    bin_op<base_ops::sub, T>(dst, lhs, rhs);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout, typename U>
+__device__ static inline void mul(rv<_T, _length, _tile_length, shape, layout> &dst, const rv<_T, _length, _tile_length, shape, layout> &lhs, const U &rhs) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    bin_op<base_ops::mul, T>(dst, lhs, rhs);
+}
+
+template<typename _T, size_t _length, size_t _tile_length, ducks::rt_shape::all shape, ducks::rv_layout::all layout, typename U>
+__device__ static inline void div(rv<_T, _length, _tile_length, shape, layout> &dst, const rv<_T, _length, _tile_length, shape, layout> &lhs, const U &rhs) {
+    using T = rv<_T, _length, _tile_length, shape, layout>;
+    bin_op<base_ops::div, T>(dst, lhs, rhs);
+}
+
 }

@@ -1,60 +1,202 @@
-schema_version: 0.1
+schema_version: 0.2
 backend: rocm
+layout: canonical_arch_variants
+
 status_values:
+  - optimized
   - implemented
-  - partial
+  - imported
   - experimental
   - planned
   - unsupported
   - capability_gated
-layout: legacy_migration
+
+variant_path_rule: kernels/<family>/<operation>/variants/rocm_<target>[/<tuned_variant>]
+
 families:
   norms:
     status: implemented
     paths:
-      - kernels/layernorm
+      - kernels/norms
   activations:
     status: partial
     paths:
-      - kernels/softmax
+      - kernels/activations
   attention:
     status: partial
     paths:
-      - kernels/attn
-      - kernels/rotary
+      - kernels/attention
   linear_attention:
     status: planned
-    paths: []
+    paths:
+      - kernels/linear_attention
   ssm:
     status: planned
-    paths: []
+    paths:
+      - kernels/ssm
   matmul:
     status: implemented
     paths:
-      - kernels/gemm
-      - kernels/torch_scaled
+      - kernels/matmul
   quantization:
     status: partial
     paths:
-      - kernels/gemm/fp8fp32
-      - kernels/gemm/mxfp8
+      - kernels/quantization
   moe:
     status: planned
-    paths: []
+    paths:
+      - kernels/moe
   sampling:
     status: planned
-    paths: []
+    paths:
+      - kernels/sampling
   serving:
     status: planned
-    paths: []
+    paths:
+      - kernels/serving
   optimizers:
     status: planned
-    paths: []
+    paths:
+      - kernels/optimizers
   collectives:
     status: experimental
     paths:
       - distributed-kernels
   utils:
     status: planned
-    paths: []
-notes: Family-level manifest. Operation-level paths should be added as kernels move into the canonical family/operation tree.
+    paths:
+      - kernels/utils
+
+operations:
+  layernorm:
+    family: norms
+    status: implemented
+    path: kernels/norms/layernorm
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/norms/layernorm/variants/rocm_cdna3
+      - name: rocm_cdna4
+        status: implemented
+        path: kernels/norms/layernorm/variants/rocm_cdna4
+
+  rmsnorm:
+    family: norms
+    status: imported
+    path: kernels/norms/rmsnorm
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/norms/rmsnorm/variants/rocm_cdna3
+
+  softmax:
+    family: activations
+    status: implemented
+    path: kernels/activations/softmax
+    variants:
+      - name: rocm_cdna4
+        status: implemented
+        path: kernels/activations/softmax/variants/rocm_cdna4
+
+  rotary:
+    family: attention
+    status: implemented
+    path: kernels/attention/rotary
+    variants:
+      - name: rocm_cdna4
+        status: implemented
+        path: kernels/attention/rotary/variants/rocm_cdna4
+
+  gqa:
+    family: attention
+    status: implemented
+    path: kernels/attention/gqa
+    variants:
+      - name: rocm_cdna4
+        status: implemented
+        path: kernels/attention/gqa/variants/rocm_cdna4
+
+  gqa_backward:
+    family: attention
+    status: implemented
+    path: kernels/attention/gqa_backward
+    variants:
+      - name: rocm_cdna4
+        status: implemented
+        path: kernels/attention/gqa_backward/variants/rocm_cdna4
+
+  gqa_causal:
+    family: attention
+    status: implemented
+    path: kernels/attention/gqa_causal
+    variants:
+      - name: rocm_cdna4
+        status: implemented
+        path: kernels/attention/gqa_causal/variants/rocm_cdna4
+
+  gqa_causal_backward:
+    family: attention
+    status: implemented
+    path: kernels/attention/gqa_causal_backward
+    variants:
+      - name: rocm_cdna4
+        status: implemented
+        path: kernels/attention/gqa_causal_backward/variants/rocm_cdna4
+
+  bf16fp32_matmul:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/bf16fp32
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/matmul/bf16fp32/variants/rocm_cdna3/8192_256_256_64_16
+      - name: rocm_cdna4
+        status: implemented
+        path: kernels/matmul/bf16fp32/variants/rocm_cdna4/mi350x
+      - name: rocm_cdna4_micros
+        status: experimental
+        path: kernels/matmul/bf16fp32/variants/rocm_cdna4/micros
+      - name: rocm_udna1
+        status: experimental
+        path: kernels/matmul/bf16fp32/variants/rocm_udna1/gfx1250
+
+  fp8fp32_matmul:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/fp8fp32
+    variants:
+      - name: rocm_cdna3
+        status: imported
+        path: kernels/matmul/fp8fp32/variants/rocm_cdna3/8192_256_256_64_32
+      - name: rocm_cdna4_4wave
+        status: implemented
+        path: kernels/matmul/fp8fp32/variants/rocm_cdna4/FP8_4wave
+      - name: rocm_cdna4_8wave
+        status: implemented
+        path: kernels/matmul/fp8fp32/variants/rocm_cdna4/FP8_8wave
+
+  mxfp8_matmul:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/mxfp8
+    variants:
+      - name: rocm_cdna4_4wave
+        status: implemented
+        path: kernels/matmul/mxfp8/variants/rocm_cdna4/MXFP8_4wave
+      - name: rocm_cdna4_8wave
+        status: implemented
+        path: kernels/matmul/mxfp8/variants/rocm_cdna4/MXFP8_8wave
+
+  scaled_matmul:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/scaled_matmul
+    variants:
+      - name: rocm_cdna4
+        status: implemented
+        path: kernels/matmul/scaled_matmul/variants/rocm_cdna4
+
+notes:
+  - Normal build and test discovery must filter by `variants/rocm_<target>` and skip archive directories.
+  - Upstream architecture branches are import sources only; supported target variants live side by side in main.

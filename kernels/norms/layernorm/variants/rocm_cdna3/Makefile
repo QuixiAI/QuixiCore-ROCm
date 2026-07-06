@@ -1,0 +1,10 @@
+GPU_TARGET ?= CDNA3
+TARGET ?= tk_kernel
+SRC ?= kernel.cpp
+PYTHON ?= python3
+LAYER_NORM_DROPOUT_P ?= 0.0
+
+EXTRA_HIPFLAGS += -DLAYER_NORM_DROPOUT_P=$(LAYER_NORM_DROPOUT_P)
+EXTRA_HIPFLAGS += -I$(ROCM_INSTALL_DIR)/include/rocrand
+
+include ../../../../common.mk

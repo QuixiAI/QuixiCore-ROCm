@@ -30,29 +30,63 @@ __device__ static inline void mfma161632(      float2 (&D)[2],
                                          const bf16_2 (&B)[4],
                                          const float2 (&C)[2]) {
 
-    typedef __attribute__((__vector_size__(8 * sizeof(__bf16)))) __bf16 bf16x8_t;
+    typedef __attribute__((__vector_size__(4 * sizeof(__bf16)))) __bf16 bf16x4_t;
     typedef __attribute__((__vector_size__(4 * sizeof(float)))) float floatx4_t;
+#if defined(KITTENS_CDNA3)
+    floatx4_t acc = *(floatx4_t*)C;
+    acc = __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(
+        *(bf16x4_t*)A,
+        *(bf16x4_t*)B,
+        acc,
+        0, 0, 0
+    );
+    *(floatx4_t*)D = __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(
+        *(bf16x4_t*)(A + 2),
+        *(bf16x4_t*)(B + 2),
+        acc,
+        0, 0, 0
+    );
+#else
+    typedef __attribute__((__vector_size__(8 * sizeof(__bf16)))) __bf16 bf16x8_t;
     *(floatx4_t*)D = __builtin_amdgcn_mfma_f32_16x16x32_bf16(
         (*(bf16x8_t*)A),
         (*(bf16x8_t*)B),
         *(floatx4_t*)C,
         0, 0, 0
     );
+#endif
 }
 __device__ static inline void mfma323216(      float2 (&D)[8],
                                          const bf16_2 (&A)[4],
                                          const bf16_2 (&B)[4],
                                          const float2 (&C)[8]) {
     // Cast to the correct vector types that the intrinsic expects
-    typedef __attribute__((__vector_size__(8 * sizeof(__bf16)))) __bf16 bf16x8_t;
+    typedef __attribute__((__vector_size__(4 * sizeof(__bf16)))) __bf16 bf16x4_t;
     typedef __attribute__((__vector_size__(16 * sizeof(float)))) float floatx16_t;
 
+#if defined(KITTENS_CDNA3)
+    floatx16_t acc = *(floatx16_t*)C;
+    acc = __builtin_amdgcn_mfma_f32_32x32x8bf16_1k(
+        *(bf16x4_t*)A,
+        *(bf16x4_t*)B,
+        acc,
+        0, 0, 0
+    );
+    *(floatx16_t*)D = __builtin_amdgcn_mfma_f32_32x32x8bf16_1k(
+        *(bf16x4_t*)(A + 2),
+        *(bf16x4_t*)(B + 2),
+        acc,
+        0, 0, 0
+    );
+#else
+    typedef __attribute__((__vector_size__(8 * sizeof(__bf16)))) __bf16 bf16x8_t;
     *(floatx16_t*)D = __builtin_amdgcn_mfma_f32_32x32x16_bf16(
         *(bf16x8_t*)(A),
         *(bf16x8_t*)(B),
         *(floatx16_t*)C,
         0, 0, 0
     );
+#endif
 }
 
 __device__ static inline void mfma323216(      float2 (&D)[8],
@@ -76,9 +110,37 @@ __device__ static inline void mfma323232(      float2 (&D)[8],
                                          const bf16_2 (&B)[8],
                                          const float2 (&C)[8]) {
     // Cast to the correct vector types that the intrinsic expects
-    typedef __attribute__((__vector_size__(8 * sizeof(__bf16)))) __bf16 bf16x8_t;
+    typedef __attribute__((__vector_size__(4 * sizeof(__bf16)))) __bf16 bf16x4_t;
     typedef __attribute__((__vector_size__(16 * sizeof(float)))) float floatx16_t;
-    
+
+#if defined(KITTENS_CDNA3)
+    floatx16_t acc = *(floatx16_t*)C;
+    acc = __builtin_amdgcn_mfma_f32_32x32x8bf16_1k(
+        *(bf16x4_t*)A,
+        *(bf16x4_t*)B,
+        acc,
+        0, 0, 0
+    );
+    acc = __builtin_amdgcn_mfma_f32_32x32x8bf16_1k(
+        *(bf16x4_t*)(A + 2),
+        *(bf16x4_t*)(B + 2),
+        acc,
+        0, 0, 0
+    );
+    acc = __builtin_amdgcn_mfma_f32_32x32x8bf16_1k(
+        *(bf16x4_t*)(A + 4),
+        *(bf16x4_t*)(B + 4),
+        acc,
+        0, 0, 0
+    );
+    *(floatx16_t*)D = __builtin_amdgcn_mfma_f32_32x32x8bf16_1k(
+        *(bf16x4_t*)(A + 6),
+        *(bf16x4_t*)(B + 6),
+        acc,
+        0, 0, 0
+    );
+#else
+    typedef __attribute__((__vector_size__(8 * sizeof(__bf16)))) __bf16 bf16x8_t;
     *(floatx16_t*)C = __builtin_amdgcn_mfma_f32_32x32x16_bf16(
         *(bf16x8_t*)A,
         *(bf16x8_t*)B,
@@ -92,6 +154,7 @@ __device__ static inline void mfma323232(      float2 (&D)[8],
         *(floatx16_t*)C,
         0, 0, 0
     );
+#endif
 }
 
 __device__ static inline void mfma323264(      float2 (&D)[8],
