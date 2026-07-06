@@ -3,11 +3,15 @@
 HIPCC ?= /opt/rocm/bin/hipcc
 HIPFLAGS ?= -std=c++17 -O3 --offload-arch=gfx942 -Wno-unused-value
 GOLDEN ?= ../../../../../../QuixiCore-CUDA/kernels/quant/golden
-all: lm_head.out
+all: lm_head.out lm_head_topkp.out
 lm_head.out: lm_head.cu quant_formats.cuh quant_formats_tables.cuh quant_tables.cuh tm_rng.cuh
 	$(HIPCC) $(HIPFLAGS) $< -o $@
 test: all
 	@for f in q8_0 q4_0 mxfp4 nvfp4 mxfp8; do HIP_VISIBLE_DEVICES=0 ./lm_head.out $(GOLDEN)/$$f; done
+	HIP_VISIBLE_DEVICES=0 ./lm_head_topkp.out
 clean:
 	rm -f *.out
 .PHONY: all test clean
+
+lm_head_topkp.out: lm_head_topkp.cu lm_head_topk_kernels.cuh
+	$(HIPCC) $(HIPFLAGS) $< -o $@

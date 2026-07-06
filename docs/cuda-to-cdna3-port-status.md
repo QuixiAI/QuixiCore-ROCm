@@ -90,7 +90,7 @@ directly on the gfx942 GPUs. The system CUDA PyTorch was left untouched.
 | `parallel/ag_gemm` | `kernels/collectives/ag_gemm` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
 | `parallel/ag_gemm_fp8` | `kernels/collectives/ag_gemm_fp8` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
 | `parallel/all_gather` | `kernels/collectives/all_gather` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
-| `parallel/all_reduce` | `kernels/collectives/all_reduce` | capability-gated | Existing `distributed-kernels/` work should be reconciled first. |
+| `parallel/all_reduce` | `kernels/collectives/all_reduce/variants/rocm_cdna3` | active | RCCL all_reduce + reduce_scatter verified across 8 MI300X (multimem/NVLS -> RCCL). all_gather/all_to_all same path. Fused ag_gemm/gemm_rs -> Iris follow-up. |
 | `parallel/all_reduce_educational` | `kernels/collectives/all_reduce` | planned | Educational CUDA path should not be imported as production coverage. |
 | `parallel/all_to_all` | `kernels/collectives/all_to_all` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
 | `parallel/gemm_ar` | `kernels/collectives/gemm_ar` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
@@ -104,6 +104,8 @@ directly on the gfx942 GPUs. The system CUDA PyTorch was left untouched.
 | `rotary` | `kernels/attention/rotary` | active, build-valid | CDNA3 path exists; correctness/perf needs ROCm PyTorch environment. |
 | `serving` | `kernels/serving/variants/rocm_cdna3` | active, build-valid | All 12 self-checking harnesses pass on MI300X (paged attn v1/v2, GQA-staged, attn_q, attn_varlen, MLA, rope_kv, kv_cache, sampling, logits, beam, spec_beam, eagle, sparse) — 104 pass-lines, 0 fail. |
 | `tm_cuda` | operation-specific ROCm directories | not-portable-as-is | Python/CUDA extension aggregator should be decomposed into native ROCm operations. |
+| `quant/lm_head_topkp` | `kernels/quantization/lm_head/variants/rocm_cdna3` | active | top-k/top-p sampling (fp16 + q8_0) vs fp64 oracle ALL PASS. |
+| `quant/followups` | `kernels/quantization/followups/variants/rocm_cdna3` | active | turboquant/selective_scan/eagle/sparse integration test ALL PASS. |
 
 ## Known Non-Ports
 
