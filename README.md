@@ -225,3 +225,7 @@ If you use or build on this work, please consider citing:
       url={https://arxiv.org/abs/2511.08083}, 
 }
 ```
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
