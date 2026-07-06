@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+target="${1:-help}"
+if [ $# -gt 0 ]; then
+  shift
+fi
+
+case "${target}" in
+  help)
+    echo "Usage: scripts/test <target>"
+    echo "Targets: tests-cdna4, tests-udna1, <path>"
+    ;;
+  tests-cdna4)
+    make -C tests/unit/cdna4 "$@"
+    ;;
+  tests-udna1)
+    make -C tests/unit/udna1 "$@"
+    ;;
+  *)
+    if [ -d "${target}" ]; then
+      make -C "${target}" "$@"
+    else
+      echo "Unknown test target: ${target}" >&2
+      exit 2
+    fi
+    ;;
+esac

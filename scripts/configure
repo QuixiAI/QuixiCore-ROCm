@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "QuixiCore ROCm uses HIP/ROCm Makefiles and documented container flows."
+if command -v hipcc >/dev/null 2>&1; then
+  hipcc --version | sed -n '1,6p'
+else
+  echo "hipcc was not found on PATH. Source env.src inside a ROCm environment before building."
+fi

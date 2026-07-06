@@ -1,0 +1,16 @@
+backend: rocm
+name: QuixiCore ROCm
+repo: QuixiAI/QuixiCore-ROCm
+umbrella: QuixiAI/QuixiCore
+contract: v0.1
+status: active
+targets:
+  - cdna2
+  - cdna3
+  - cdna4
+upstream: HazyResearch/HipKittens
+integrations:
+  - ROCm
+  - HIP
+  - AITER
+notes: Native AMD ROCm backend for CDNA accelerators. Current source layout is migrating toward the shared QuixiCore family/operation taxonomy.

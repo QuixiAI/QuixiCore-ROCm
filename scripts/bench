@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -d analysis ]; then
+  echo "ROCm benchmark workflows currently live under analysis/."
+  echo "Run the analysis scripts documented in README.md and docs/ for the target GPU/container."
+else
+  echo "No ROCm benchmark harness is present yet."
+fi

@@ -1,0 +1,60 @@
+schema_version: 0.1
+backend: rocm
+status_values:
+  - implemented
+  - partial
+  - experimental
+  - planned
+  - unsupported
+  - capability_gated
+layout: legacy_migration
+families:
+  norms:
+    status: implemented
+    paths:
+      - kernels/layernorm
+  activations:
+    status: partial
+    paths:
+      - kernels/softmax
+  attention:
+    status: partial
+    paths:
+      - kernels/attn
+      - kernels/rotary
+  linear_attention:
+    status: planned
+    paths: []
+  ssm:
+    status: planned
+    paths: []
+  matmul:
+    status: implemented
+    paths:
+      - kernels/gemm
+      - kernels/torch_scaled
+  quantization:
+    status: partial
+    paths:
+      - kernels/gemm/fp8fp32
+      - kernels/gemm/mxfp8
+  moe:
+    status: planned
+    paths: []
+  sampling:
+    status: planned
+    paths: []
+  serving:
+    status: planned
+    paths: []
+  optimizers:
+    status: planned
+    paths: []
+  collectives:
+    status: experimental
+    paths:
+      - distributed-kernels
+  utils:
+    status: planned
+    paths: []
+notes: Family-level manifest. Operation-level paths should be added as kernels move into the canonical family/operation tree.

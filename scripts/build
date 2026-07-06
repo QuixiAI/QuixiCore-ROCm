@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+target="${1:-help}"
+if [ $# -gt 0 ]; then
+  shift
+fi
+
+case "${target}" in
+  help)
+    echo "Usage: scripts/build <target>"
+    echo "Targets:"
+    echo "  tests-cdna4      Build CDNA4 primitive tests"
+    echo "  tests-udna1      Build UDNA1 primitive tests"
+    echo "  <path>           Run make in a kernel directory, for example kernels/gemm/bf16fp32"
+    ;;
+  tests-cdna4)
+    make -C tests/unit/cdna4 "$@"
+    ;;
+  tests-udna1)
+    make -C tests/unit/udna1 "$@"
+    ;;
+  *)
+    if [ -d "${target}" ]; then
+      make -C "${target}" "$@"
+    elif [ -d "kernels/${target}" ]; then
+      make -C "kernels/${target}" "$@"
+    else
+      echo "Unknown build target: ${target}" >&2
+      exit 2
+    fi
+    ;;
+esac

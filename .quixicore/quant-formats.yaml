@@ -1,0 +1,25 @@
+schema_version: 0.1
+backend: rocm
+formats:
+  gguf:
+    status: planned
+    notes: Not yet claimed in the ROCm backend manifest.
+  mx:
+    status: partial
+    notes: MXFP8-related GEMM work exists under the current GEMM tree.
+  fp8:
+    status: partial
+    notes: FP8 GEMM coverage exists; broader fp8 serving and quantization coverage is planned.
+  fp4:
+    status: planned
+    notes: Not yet claimed in the ROCm backend manifest.
+  bitnet:
+    status: planned
+    notes: Not yet claimed in the ROCm backend manifest.
+status_values:
+  - implemented
+  - partial
+  - experimental
+  - planned
+  - unsupported
+notes: Format details should be expanded into operation-level coverage as quant kernels land.
