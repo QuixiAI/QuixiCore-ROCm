@@ -87,14 +87,14 @@ directly on the gfx942 GPUs. The system CUDA PyTorch was left untouched.
 | `mamba2` | `kernels/ssm/mamba2/variants/rocm_cdna3` | active | selective_scan (+APC) AND the SSD/state-space-duality form (mamba2.cu) ported; all PASS vs fp64. |
 | `moe` | `kernels/moe/variants/rocm_cdna3` | active, build-valid | Routing + grouped-GEMM MoE MLP ported; 8/8 checks pass on MI300X (end-to-end MoE MLP vs fp64 5.9e-7). |
 | `moe_quant` | `kernels/moe/variants/rocm_cdna3_quant` | active, build-valid | 3 quantized grouped GEMMs (fp8/nvfp4/wna16) rewritten to MFMA + plain silu/quant/routing; ALL PASS vs fp64 on MI300X. |
-| `parallel/ag_gemm` | `kernels/collectives/ag_gemm` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
+| `parallel/ag_gemm` | `kernels/collectives/gemm_collectives/variants/rocm_cdna3` | active | ag_gemm (collective o local GEMM) validated across 4 & 8 MI300X via torchrun+RCCL. Overlap = follow-up. |
 | `parallel/ag_gemm_fp8` | `kernels/collectives/ag_gemm_fp8` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
 | `parallel/all_gather` | `kernels/collectives/all_gather` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
 | `parallel/all_reduce` | `kernels/collectives/all_reduce/variants/rocm_cdna3` | active | RCCL all_reduce + reduce_scatter verified across 8 MI300X (multimem/NVLS -> RCCL). all_gather/all_to_all same path. Fused ag_gemm/gemm_rs -> Iris follow-up. |
 | `parallel/all_reduce_educational` | `kernels/collectives/all_reduce` | planned | Educational CUDA path should not be imported as production coverage. |
 | `parallel/all_to_all` | `kernels/collectives/all_to_all` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
-| `parallel/gemm_ar` | `kernels/collectives/gemm_ar` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
-| `parallel/gemm_rs` | `kernels/collectives/gemm_rs` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
+| `parallel/gemm_ar` | `kernels/collectives/gemm_collectives/variants/rocm_cdna3` | active | gemm_ar (collective o local GEMM) validated across 4 & 8 MI300X via torchrun+RCCL. Overlap = follow-up. |
+| `parallel/gemm_rs` | `kernels/collectives/gemm_collectives/variants/rocm_cdna3` | active | gemm_rs (collective o local GEMM) validated across 4 & 8 MI300X via torchrun+RCCL. Overlap = follow-up. |
 | `parallel/gemm_rs_fp8` | `kernels/collectives/gemm_rs_fp8` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
 | `parallel/moe_dispatch_gemm` | `kernels/collectives/moe_dispatch_gemm` and `kernels/moe` | capability-gated | Needs MoE route plus distributed runtime design. |
 | `parallel/reduce_scatter` | `kernels/collectives/reduce_scatter` | capability-gated | Requires distributed ROCm/RCCL design and validation. |

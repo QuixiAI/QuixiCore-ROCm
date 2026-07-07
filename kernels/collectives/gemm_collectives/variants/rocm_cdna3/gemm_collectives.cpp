@@ -32,7 +32,7 @@ static void launch_gemm(const float*A,const float*B,float*C,int M,int N,int K,hi
     dim3 b(16,16), g((N+15)/16,(M+15)/16); gemm<<<g,b,0,st>>>(A,B,C,M,N,K);
 }
 
-int main(){
+int main(){ setvbuf(stdout,NULL,_IOLBF,0);
     int nd=0; HC(hipGetDeviceCount(&nd)); int P=(nd>=4)?4:nd;   // use 4 ranks
     const int M=64,N=64,K=128, Ks=K/P, Ms=M/P;
     printf("== fused collective+GEMM across %d GPUs  M=%d N=%d K=%d\n",P,M,N,K);
@@ -44,7 +44,7 @@ int main(){
     std::vector<int> devs(P); for(int i=0;i<P;i++)devs[i]=i;
     std::vector<ncclComm_t> comm(P); NC(ncclCommInitAll(comm.data(),P,devs.data()));
     std::vector<hipStream_t> st(P);
-    std::vector<float*> dAar(P),dBar(P),dYar(P),dAag(P),dB(P),dYag(P),dPart(P),dYrs(P);
+    std::vector<float*> dAar(P),dBar(P),dYar(P),dAag(P),dAsend(P),dB(P),dYag(P),dPart(P),dYrs(P);
     for(int r=0;r<P;r++){ HC(hipSetDevice(r)); HC(hipStreamCreate(&st[r]));
         // gemm_ar: A[:,Kr] (M x Ks), B[Kr,:] (Ks x N)
         std::vector<float> aK(M*Ks),bK(Ks*N);
@@ -54,7 +54,8 @@ int main(){
         HC(hipMemcpy(dAar[r],aK.data(),M*Ks*4,hipMemcpyHostToDevice)); HC(hipMemcpy(dBar[r],bK.data(),Ks*N*4,hipMemcpyHostToDevice));
         // ag_gemm: A[Mr,:] (Ms x K), full B; gathered A buffer (M x K)
         HC(hipMalloc(&dAag[r],(size_t)M*K*4)); HC(hipMalloc(&dB[r],(size_t)K*N*4)); HC(hipMalloc(&dYag[r],(size_t)M*N*4));
-        HC(hipMemcpy(dAag[r]+ (size_t)r*Ms*K, A.data()+(size_t)r*Ms*K, (size_t)Ms*K*4, hipMemcpyHostToDevice));
+        HC(hipMalloc(&dAsend[r],(size_t)Ms*K*4));   // dedicated all-gather send buffer (non-in-place)
+        HC(hipMemcpy(dAsend[r], A.data()+(size_t)r*Ms*K, (size_t)Ms*K*4, hipMemcpyHostToDevice));
         HC(hipMemcpy(dB[r],B.data(),(size_t)K*N*4,hipMemcpyHostToDevice));
         HC(hipMalloc(&dPart[r],(size_t)M*N*4)); HC(hipMalloc(&dYrs[r],(size_t)Ms*N*4));
     }
@@ -62,7 +63,7 @@ int main(){
     for(int r=0;r<P;r++){ HC(hipSetDevice(r)); launch_gemm(dAar[r],dBar[r],dYar[r],M,N,Ks,st[r]); }
     NC(ncclGroupStart()); for(int r=0;r<P;r++) NC(ncclAllReduce(dYar[r],dYar[r],M*N,ncclFloat,ncclSum,comm[r],st[r])); NC(ncclGroupEnd());
     // ---- ag_gemm: all-gather A shards then full GEMM ----
-    NC(ncclGroupStart()); for(int r=0;r<P;r++) NC(ncclAllGather(dAag[r]+(size_t)r*Ms*K, dAag[r], (size_t)Ms*K, ncclFloat, comm[r], st[r])); NC(ncclGroupEnd());
+    NC(ncclGroupStart()); for(int r=0;r<P;r++) NC(ncclAllGather(dAsend[r], dAag[r], (size_t)Ms*K, ncclFloat, comm[r], st[r])); NC(ncclGroupEnd());
     for(int r=0;r<P;r++){ HC(hipSetDevice(r)); launch_gemm(dAag[r],dB[r],dYag[r],M,N,K,st[r]); }
     // ---- gemm_rs: local partial GEMM (K-shard, full M) then reduce-scatter over M ----
     for(int r=0;r<P;r++){ HC(hipSetDevice(r)); launch_gemm(dAar[r],dBar[r],dPart[r],M,N,Ks,st[r]); }

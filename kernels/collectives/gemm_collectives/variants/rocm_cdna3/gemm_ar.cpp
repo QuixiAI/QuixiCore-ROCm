@@ -20,17 +20,19 @@ int main(){
     std::vector<float> A(M*K),B(K*N); for(auto&x:A)x=nd2(rng); for(auto&x:B)x=nd2(rng);
     std::vector<double> ref(M*N,0); for(int m=0;m<M;m++)for(int n=0;n<N;n++){double s=0;for(int k=0;k<K;k++)s+=(double)A[m*K+k]*B[k*N+n];ref[m*N+n]=s;}
     std::vector<int> devs(P); for(int i=0;i<P;i++)devs[i]=i;
-    std::vector<ncclComm_t> comm(P); NC(ncclCommInitAll(comm.data(),P,devs.data()));
-    std::vector<hipStream_t> st(P); std::vector<float*> dA(P),dB(P),dY(P);
-    for(int r=0;r<P;r++){ HC(hipSetDevice(r)); HC(hipStreamCreate(&st[r]));
+    std::vector<ncclComm_t> comm(P); NC(ncclCommInitAll(comm.data(),P,devs.data())); printf("[ck] init done\n");
+    std::vector<hipStream_t> st(P), sc(P); std::vector<float*> dA(P),dB(P),dY(P);
+    for(int r=0;r<P;r++){ HC(hipSetDevice(r)); HC(hipStreamCreate(&st[r])); HC(hipStreamCreate(&sc[r]));
         std::vector<float> aK(M*Ks),bK(Ks*N);
         for(int m=0;m<M;m++)for(int k=0;k<Ks;k++)aK[m*Ks+k]=A[m*K+r*Ks+k];
         for(int k=0;k<Ks;k++)for(int n=0;n<N;n++)bK[k*N+n]=B[(r*Ks+k)*N+n];
         HC(hipMalloc(&dA[r],M*Ks*4));HC(hipMalloc(&dB[r],Ks*N*4));HC(hipMalloc(&dY[r],M*N*4));
         HC(hipMemcpy(dA[r],aK.data(),M*Ks*4,hipMemcpyHostToDevice));HC(hipMemcpy(dB[r],bK.data(),Ks*N*4,hipMemcpyHostToDevice)); }
     for(int r=0;r<P;r++){ HC(hipSetDevice(r)); dim3 b(16,16),g((N+15)/16,(M+15)/16); gemm<<<g,b,0,st[r]>>>(dA[r],dB[r],dY[r],M,N,Ks); }
-    NC(ncclGroupStart()); for(int r=0;r<P;r++) NC(ncclAllReduce(dY[r],dY[r],M*N,ncclFloat,ncclSum,comm[r],st[r])); NC(ncclGroupEnd());
-    for(int r=0;r<P;r++){ HC(hipSetDevice(r)); HC(hipStreamSynchronize(st[r])); }
+    for(int r=0;r<P;r++){ HC(hipSetDevice(r)); HC(hipStreamSynchronize(st[r])); }  // finish GEMMs before collective
+    for(int r=0;r<P;r++){ HC(hipSetDevice(r)); HC(hipDeviceSynchronize()); } printf("[ck] gemms done\n");
+    NC(ncclGroupStart()); for(int r=0;r<P;r++) NC(ncclAllReduce(dY[r],dY[r],M*N,ncclFloat,ncclSum,comm[r],sc[r])); NC(ncclGroupEnd()); printf("[ck] allreduce enqueued\n");
+    for(int r=0;r<P;r++){ HC(hipSetDevice(r)); HC(hipStreamSynchronize(sc[r])); }
     HC(hipSetDevice(0)); std::vector<float> y(M*N); HC(hipMemcpy(y.data(),dY[0],M*N*4,hipMemcpyDeviceToHost));
     double sa=0,sr=0; for(int k=0;k<M*N;k++){sa+=std::abs(y[k]-ref[k]);sr+=std::abs(ref[k]);}
     double rel=sa/std::max(sr,1e-30); int fail=rel>=1e-4;

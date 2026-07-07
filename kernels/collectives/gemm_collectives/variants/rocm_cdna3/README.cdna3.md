@@ -1,21 +1,44 @@
-# Fused collective+GEMM — CDNA3 (gfx942): semantics implemented; multi-GPU run pending
+# Fused collective+GEMM — CDNA3 (gfx942): correctness-valid (multi-GPU)
 
 Correct ROCm semantics for the CUDA parallel/{gemm_ar,ag_gemm,gemm_rs} kernels,
 which fuse NVIDIA multimem (NVLS) collectives with a GEMM. gfx942 has no NVLS, so
-these compose RCCL (the correct collective) with a local GEMM:
+these compose an RCCL collective with a local GEMM:
 
-- `gemm_ar`  : K-parallel GEMM + ncclAllReduce  (Y = allreduce(A_r@B_r) = A@B)
-- `ag_gemm`  : ncclAllGather(A shards) + full GEMM
-- `gemm_rs`  : K-parallel GEMM + ncclReduceScatter over M
+- `gemm_ar`  : K-parallel local GEMM + all_reduce(sum)  -> Y = A@B
+- `ag_gemm`  : all_gather(A row-shards) + full GEMM
+- `gemm_rs`  : K-parallel local GEMM + reduce_scatter over M
 
-Correctness rests on composition of two independently-verified pieces: the plain
-RCCL collectives (`../../all_reduce/variants/rocm_cdna3`, verified all_reduce +
-reduce_scatter across 8 MI300X) and a local GEMM. `gemm_ar.cpp` is the clean
-standalone; `gemm_collectives.cpp` bundles all three.
+## Validated — one process per GPU (production model)
 
-STATUS: the live multi-GPU run in this session was left BLOCKED — repeated
-RCCL launches that timed out wedged the multi-GPU RCCL state (stuck comms /IPC).
-Re-running needs a clean process environment (fresh shell/container, or a GPU
-reset) to clear the stuck state; the code itself is unchanged from the verified
-composition. The real remaining work is compute/comm OVERLAP (streamed GEMM
-tiles or the repo's Iris/XGMI framework), which is the perf follow-up (task #12).
+`torch_gemm_collectives.py` runs all three across the MI300X GPUs via
+`torchrun` + `torch.distributed` (NCCL/RCCL backend, torch's bundled RCCL) and
+checks each against a single-GPU reference. **gemm_ar / ag_gemm / gemm_rs all
+PASS on 4 and 8 GPUs.**
+
+```bash
+HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  ~/.venvs/rocm-torch/bin/torchrun --nproc_per_node=8 torch_gemm_collectives.py
+```
+
+This is the correct multi-GPU model — one process per GPU, each owning one device
+— exactly how PyTorch DDP / Megatron tensor-parallel run.
+
+## Note on the single-process C++ harnesses
+
+`gemm_collectives.cpp` / `gemm_ar.cpp` (RCCL + a HIP GEMM in one process driving
+all devices) are kept for reference but are NOT the way to run this: single-
+process-multi-device RCCL **deadlocks** when a compute kernel precedes the
+collective (single host thread), and the thread-per-device variant hits an
+`invalid resource handle` (RCCL comms created in one thread used from another).
+The plain collectives (`../../all_reduce/variants/rocm_cdna3`, all_reduce +
+reduce_scatter) do pass single-process because they never launch a compute
+kernel first — but the general fused pattern needs one process per GPU. RCCL's
+first collective on a fresh single-process communicator also has a ~2 min warmup
+on this box; torchrun avoids all of that.
+
+## Remaining (perf / scope)
+
+Compute/comm OVERLAP (streamed GEMM tiles, or the repo's Iris/XGMI framework) and
+the device-initiated one-sided kernels (ring_attn, ulysses_attn,
+moe_dispatch_gemm) are the performance follow-up (task #12). Correctness of the
+tensor/sequence-parallel GEMM math is established here.
