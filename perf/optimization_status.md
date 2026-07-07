@@ -662,6 +662,40 @@ into the production serving dispatch.
 
 Raw: perf/results/2026-07-07/qgemm-wide/bench.txt.
 
+## 2026-07-07: Collective+GEMM Compute/Comm Overlap (chunked RCCL) — REJECTED
+
+Status: rejected for perf (correct, but slower than the non-overlapped fused path
+on MI300X). Important hardware finding, not a bug.
+
+Experiment: overlap the collective with the GEMM by chunking along N and issuing
+per-chunk async collectives (all_reduce/reduce_scatter, async_op=True) so chunk c's
+collective runs while chunk c+1's GEMM computes (torch_gemm_overlap.py, torchrun
+one-process-per-GPU, repo venv torch 2.12.1+rocm7.2). gemm_ar and gemm_rs both
+validate allclose vs single-GPU ref on 4 and 8 GPUs.
+
+Perf A/B (base = single fused collective; overlap = chunked async):
+| GPUs | shape | gemm_ar | gemm_rs |
+|---|---|---|---|
+| 4 | 4096^3 (C=4)        | 0.96x | 0.82x |
+| 8 | 4096^3 (C=2)        | 0.86x | 0.82x |
+| 8 | 8192x8192x1024 (C=2)| 0.91x | 0.92x |
+| 8 | 4096x16384x1024 (C=2)| 0.91x | 0.92x |
+
+Decision: REJECT (0.82-0.96x everywhere). Root cause: on MI300X, RCCL collectives
+run as **compute kernels on the CUs** (no dedicated inline comm engine like NVLink
+SHARP), so the collective and the GEMM contend for the same CUs -- chunking cannot
+hide comm behind compute, and it also shrinks each collective's message size,
+costing RCCL bandwidth efficiency. The single large fused collective is optimal.
+
+Implication: intra-op chunked overlap is the wrong lever here. Real overlap on
+this hardware needs either inter-op pipelining (model level, out of scope) or
+device-initiated one-sided XGMI that does not spin up a separate CU-bound
+collective kernel -- i.e. **Iris (Step 8)**, whose in-kernel XGMI store/put can
+issue comm from the GEMM epilogue itself. This result motivates Step 8.
+torch_gemm_overlap.py is kept as the validated overlap harness/comparator.
+
+Raw: perf/results/2026-07-07/collective-overlap/sweep.txt.
+
 ## Current Baseline Sources
 
 Status: baselines exist, not yet normalized into the shared harness.
