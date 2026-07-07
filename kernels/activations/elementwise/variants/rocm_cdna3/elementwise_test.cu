@@ -118,11 +118,11 @@ static void test_norms() {
     float *g1 = dzero<float>((size_t)M*D), *g2 = dzero<float>((size_t)M*D), *g3 = dzero<float>((size_t)M*D);
     float *aw = dzero<float>(D), *aw2 = dzero<float>(D), *ab = dzero<float>(D);
 
-    rms_norm_fwd<<<M, 32>>>(dx_, dw_, o1, D, eps);
-    layernorm_fwd<<<M, 32>>>(dx_, dw_, db_, o2, D, eps);
-    rms_norm_bwd_dx<<<M, 32>>>(dx_, dw_, ddy, dr, g1, D);
-    rms_norm_bwd_fused<<<M, 32>>>(dx_, dw_, ddy, g2, aw, D, eps);
-    layernorm_bwd_dx<<<M, 32>>>(dx_, dw_, ddy, dm, dlr, g3, D);
+    rms_norm_fwd<<<M, 64>>>(dx_, dw_, o1, D, eps);
+    layernorm_fwd<<<M, 64>>>(dx_, dw_, db_, o2, D, eps);
+    rms_norm_bwd_dx<<<M, 64>>>(dx_, dw_, ddy, dr, g1, D);
+    rms_norm_bwd_fused<<<M, 64>>>(dx_, dw_, ddy, g2, aw, D, eps);
+    layernorm_bwd_dx<<<M, 64>>>(dx_, dw_, ddy, dm, dlr, g3, D);
     CUCHECK(hipDeviceSynchronize());
     report("rms_norm_fwd", maxrel(rms_o, d2h(o1, (size_t)M*D)), 2e-6);
     report("layernorm_fwd", maxrel(ln_o, d2h(o2, (size_t)M*D)), 2e-6);
@@ -132,7 +132,7 @@ static void test_norms() {
     report("layernorm_bwd_dx", maxrel(ln_dx, d2h(g3, (size_t)M*D)), 2e-5);
 
     float *g4 = dzero<float>((size_t)M*D);
-    layernorm_bwd_fused<<<M, 32>>>(dx_, dw_, ddy, g4, aw2, ab, D, eps);
+    layernorm_bwd_fused<<<M, 64>>>(dx_, dw_, ddy, g4, aw2, ab, D, eps);
     CUCHECK(hipDeviceSynchronize());
     report("layernorm_bwd_fused dx", maxrel(ln_dx, d2h(g4, (size_t)M*D)), 2e-5);
     report("layernorm_bwd_fused dW", maxrel(ln_dw, d2h(aw2, D), 4.0), 2e-5);
@@ -182,35 +182,35 @@ static void test_add_norm() {
     uint8_t *c = dzero<uint8_t>((size_t)M*D);
     float *sc = dzero<float>(M);
 
-    rms_norm_add_k<float,false,false><<<M,32>>>(dx_, drs, dw, o, nullptr, ro, nullptr, D, eps, 0);
+    rms_norm_add_k<float,false,false><<<M, 64>>>(dx_, drs, dw, o, nullptr, ro, nullptr, D, eps, 0);
     CUCHECK(hipDeviceSynchronize());
     report("rms_norm_add o", maxrel(rms_o, d2h(o, (size_t)M*D)), 2e-6);
     report("rms_norm_add res_out", maxrel(sum_, d2h(ro, (size_t)M*D)), 1e-7);
 
-    layernorm_add_k<float,false,false><<<M,32>>>(dx_, drs, dw, db, o, nullptr, ro, nullptr, D, eps, 0);
+    layernorm_add_k<float,false,false><<<M, 64>>>(dx_, drs, dw, db, o, nullptr, ro, nullptr, D, eps, 0);
     CUCHECK(hipDeviceSynchronize());
     report("layernorm_add o", maxrel(ln_o, d2h(o, (size_t)M*D)), 2e-6);
 
     long mm = 0;
-    rms_norm_add_k<float,true,false><<<M,32>>>(dx_, drs, dw, nullptr, c, ro, nullptr, D, eps, inv_scale);
+    rms_norm_add_k<float,true,false><<<M, 64>>>(dx_, drs, dw, nullptr, c, ro, nullptr, D, eps, inv_scale);
     CUCHECK(hipDeviceSynchronize());
     { auto got = d2h(c, (size_t)M*D); for (size_t i = 0; i < got.size(); ++i) mm += got[i] != rms_c[i]; }
     report_exact("rms_norm_add_fp8 codes", mm);
 
-    rms_norm_add_k<float,true,true><<<M,32>>>(dx_, drs, dw, nullptr, c, ro, sc, D, eps, 0);
+    rms_norm_add_k<float,true,true><<<M, 64>>>(dx_, drs, dw, nullptr, c, ro, sc, D, eps, 0);
     CUCHECK(hipDeviceSynchronize());
     mm = 0;
     { auto got = d2h(c, (size_t)M*D); for (size_t i = 0; i < got.size(); ++i) mm += got[i] != rms_cd[i]; }
     report_exact("rms_norm_add_fp8_dyn codes", mm);
     report("rms_norm_add_fp8_dyn scale", maxrel(rms_s, d2h(sc, M), 1e-3), 1e-5);
 
-    layernorm_add_k<float,true,false><<<M,32>>>(dx_, drs, dw, db, nullptr, c, ro, nullptr, D, eps, inv_scale);
+    layernorm_add_k<float,true,false><<<M, 64>>>(dx_, drs, dw, db, nullptr, c, ro, nullptr, D, eps, inv_scale);
     CUCHECK(hipDeviceSynchronize());
     mm = 0;
     { auto got = d2h(c, (size_t)M*D); for (size_t i = 0; i < got.size(); ++i) mm += got[i] != ln_c[i]; }
     report_exact("layernorm_add_fp8 codes", mm);
 
-    layernorm_add_k<float,true,true><<<M,32>>>(dx_, drs, dw, db, nullptr, c, ro, sc, D, eps, 0);
+    layernorm_add_k<float,true,true><<<M, 64>>>(dx_, drs, dw, db, nullptr, c, ro, sc, D, eps, 0);
     CUCHECK(hipDeviceSynchronize());
     mm = 0;
     { auto got = d2h(c, (size_t)M*D); for (size_t i = 0; i < got.size(); ++i) mm += got[i] != ln_cd[i]; }
@@ -231,7 +231,7 @@ static void test_softmax_gelu() {
         for (int j = 0; j < D; ++j) ref[base+j] = std::exp((double)x[base+j]-m)/s;
     }
     float *dx_ = dnew(x), *o = dzero<float>((size_t)M*D);
-    softmax_fwd<<<M,32>>>(dx_, o, D);
+    softmax_fwd<<<M, 64>>>(dx_, o, D);
     CUCHECK(hipDeviceSynchronize());
     report("softmax_fwd", maxrel(ref, d2h(o, (size_t)M*D), 1e-4), 1e-4);
 
@@ -395,9 +395,9 @@ static void test_cross_entropy() {
         ce_ref64(logits, tgt, Tn, V, ii, c.eps, c.zl, c.cap, go, rl, rlse, rg);
         char nm[80];
         // 1-warp variants
-        cross_entropy_fwd<<<Tn,32>>>(dl, dt, loss, lse, V, ii, (float)c.eps, (float)c.zl, (float)c.cap);
+        cross_entropy_fwd<<<Tn, 64>>>(dl, dt, loss, lse, V, ii, (float)c.eps, (float)c.zl, (float)c.cap);
         CUCHECK(hipDeviceSynchronize());
-        cross_entropy_bwd<<<Tn,32>>>(dl, dt, lse, dgo, grad, V, ii, (float)c.eps, (float)c.zl, (float)c.cap);
+        cross_entropy_bwd<<<Tn, 64>>>(dl, dt, lse, dgo, grad, V, ii, (float)c.eps, (float)c.zl, (float)c.cap);
         CUCHECK(hipDeviceSynchronize());
         snprintf(nm, sizeof nm, "cross_entropy [%s]", c.nm);
         double e = std::max(maxrel(rl, d2h(loss, Tn)), maxrel(rlse, d2h(lse, Tn)));

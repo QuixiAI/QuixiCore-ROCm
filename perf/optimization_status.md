@@ -537,6 +537,36 @@ Iris/XGMI) and the device-initiated ring_attn / ulysses_attn / moe_dispatch_gemm
 
 Raw: perf/results/2026-07-07/collectives/torchrun_{4,8}gpu.txt.
 
+## 2026-07-07: Elementwise/Norm 64-Lane Widening — LANDED
+
+Status: landed. The +15-61% 64-lane wavefront win (measured 2026-07-06) is now
+the shipped implementation.
+
+Change: the 11 single-warp-per-row kernels (rms_norm fwd/bwd_dx/bwd_fused,
+layernorm fwd/bwd_dx/bwd_fused, rms_norm_add_k, layernorm_add_k, softmax_fwd,
+cross_entropy fwd/bwd) in `tm_elementwise_kernels.cuh` now reduce over the full
+CDNA3 wavefront via `rowreduce_{sum,max}_f` (blockDim.x-wide, tm_warp.cuh) and
+stride `+= blockDim.x`; launched at 64 threads. The `_mw` multi-warp
+cross_entropy, `hadamard_k` (32-lane row packing), and flat/block-strided
+kernels are unchanged (structural 32-lane assumptions). The kernels are
+blockDim.x-aware so bench.cu A/Bs the same kernel at 32 vs 64.
+
+Correctness: `make test` 56/56 fp64-oracle PASS (unchanged errors; worst 2.9e-6).
+Perf A/B (MI300X, float, shipped kernel @32 vs @64):
+| shape (rows x hid) | rms 32 | rms 64 | ln 32 | ln 64 |
+|---|---|---|---|---|
+| 4096 x 768   | 1146 GB/s | 1875 (+64%) | 982  | 1528 (+56%) |
+| 4096 x 4096  | 1470 GB/s | 2512 (+71%) | 1026 | 1750 (+71%) |
+| 16384 x 2048 | 2281 GB/s | 3109 (+36%) | 1630 | 2399 (+47%) |
+| 65536 x 8192 | 1691 GB/s | 2201 (+30%) | 1226 | 1655 (+35%) |
+
+Decision: KEEP (+30-71%, well above the 8-10% threshold; half-wavefront blocks
+wasted half the vector-memory issue width). Follow-up (deferred, separate A/B):
+float4-vectorized D-strided loads and multi-row-per-wavefront for small hidden
+sizes (norm path still ~2.2-3.1 TB/s vs ~5.3 TB/s HBM3 peak).
+
+Raw: perf/results/2026-07-07/elementwise-64lane/bench_ab.txt.
+
 ## Current Baseline Sources
 
 Status: baselines exist, not yet normalized into the shared harness.

@@ -103,7 +103,7 @@ operations:
 
   elementwise:
     family: activations
-    status: imported
+    status: optimized
     path: kernels/activations/elementwise
     notes: >-
       Port of QuixiCore-CUDA/kernels/elementwise (rms/layernorm fwd+bwd,

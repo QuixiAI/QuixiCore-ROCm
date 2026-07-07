@@ -23,6 +23,17 @@ __device__ __forceinline__ float warp_max_f(float v) {
     for (int off = 16; off > 0; off >>= 1) v = fmaxf(v, __shfl_xor(v, off));
     return v;
 }
+// Reductions over the launched block width (blockDim.x lanes), for the
+// single-warp-per-row kernels launched at 32 OR 64 threads. At blockDim.x=64
+// this uses the full CDNA3 wavefront; correct for any power-of-two <= 64.
+__device__ __forceinline__ float rowreduce_sum_f(float v) {
+    for (int off = blockDim.x >> 1; off > 0; off >>= 1) v += __shfl_xor(v, off);
+    return v;
+}
+__device__ __forceinline__ float rowreduce_max_f(float v) {
+    for (int off = blockDim.x >> 1; off > 0; off >>= 1) v = fmaxf(v, __shfl_xor(v, off));
+    return v;
+}
 __device__ __forceinline__ float warp_min_f(float v) {
     #pragma unroll
     for (int off = 16; off > 0; off >>= 1) v = fminf(v, __shfl_xor(v, off));

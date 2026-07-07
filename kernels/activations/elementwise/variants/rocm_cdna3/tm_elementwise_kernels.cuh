@@ -29,6 +29,8 @@ namespace tme {
 
 using tms::warp_sum_f;
 using tms::warp_max_f;
+using tms::rowreduce_sum_f;
+using tms::rowreduce_max_f;
 using tmq::rng_uniform;
 
 // ---- T <-> float ----------------------------------------------------------
@@ -76,10 +78,10 @@ __global__ void rms_norm_fwd(const T* __restrict__ x, const T* __restrict__ w,
     const long base = (long)blockIdx.x * D;
     const int lane = threadIdx.x;
     float ss = 0.0f;
-    for (int j = lane; j < D; j += 32) { const float v = tf(x[base + j]); ss += v * v; }
-    ss = warp_sum_f(ss);
+    for (int j = lane; j < D; j += blockDim.x) { const float v = tf(x[base + j]); ss += v * v; }
+    ss = rowreduce_sum_f(ss);
     const float inv = rsqrtf(ss / float(D) + eps);
-    for (int j = lane; j < D; j += 32)
+    for (int j = lane; j < D; j += blockDim.x)
         o[base + j] = ft<T>(tf(x[base + j]) * inv * tf(w[j]));
 }
 
@@ -93,11 +95,11 @@ __global__ void rms_norm_bwd_dx(const T* __restrict__ x, const T* __restrict__ w
     const int lane = threadIdx.x;
     const float r = rstd[blockIdx.x];
     float s = 0.0f;
-    for (int j = lane; j < D; j += 32)
+    for (int j = lane; j < D; j += blockDim.x)
         s += (tf(dy[base + j]) * tf(w[j])) * tf(x[base + j]);
-    s = warp_sum_f(s);
+    s = rowreduce_sum_f(s);
     const float c = r * r * r * s / float(D);
-    for (int j = lane; j < D; j += 32) {
+    for (int j = lane; j < D; j += blockDim.x) {
         const float m = tf(dy[base + j]) * tf(w[j]);
         dx[base + j] = ft<T>(r * m - c * tf(x[base + j]));
     }
@@ -112,16 +114,16 @@ __global__ void rms_norm_bwd_fused(const T* __restrict__ x, const T* __restrict_
     const long base = (long)blockIdx.x * D;
     const int lane = threadIdx.x;
     float ssq = 0.0f, s = 0.0f;
-    for (int j = lane; j < D; j += 32) {
+    for (int j = lane; j < D; j += blockDim.x) {
         const float xv = tf(x[base + j]);
         ssq += xv * xv;
         s   += (tf(dy[base + j]) * tf(w[j])) * xv;
     }
-    ssq = warp_sum_f(ssq);
-    s   = warp_sum_f(s);
+    ssq = rowreduce_sum_f(ssq);
+    s   = rowreduce_sum_f(s);
     const float r = rsqrtf(ssq / float(D) + eps);
     const float c = r * r * r * s / float(D);
-    for (int j = lane; j < D; j += 32) {
+    for (int j = lane; j < D; j += blockDim.x) {
         const float xv = tf(x[base + j]);
         const float m  = tf(dy[base + j]) * tf(w[j]);
         dx[base + j] = ft<T>(r * m - c * xv);
@@ -139,16 +141,16 @@ __global__ void layernorm_fwd(const T* __restrict__ x, const T* __restrict__ w,
     const long base = (long)blockIdx.x * D;
     const int lane = threadIdx.x;
     float sx = 0.0f;
-    for (int j = lane; j < D; j += 32) sx += tf(x[base + j]);
-    const float mu = warp_sum_f(sx) / float(D);
+    for (int j = lane; j < D; j += blockDim.x) sx += tf(x[base + j]);
+    const float mu = rowreduce_sum_f(sx) / float(D);
     float var = 0.0f;
-    for (int j = lane; j < D; j += 32) {
+    for (int j = lane; j < D; j += blockDim.x) {
         const float d = tf(x[base + j]) - mu;
         var += d * d;
     }
-    var = warp_sum_f(var) / float(D);
+    var = rowreduce_sum_f(var) / float(D);
     const float inv = rsqrtf(var + eps);
-    for (int j = lane; j < D; j += 32)
+    for (int j = lane; j < D; j += blockDim.x)
         o[base + j] = ft<T>((tf(x[base + j]) - mu) * inv * tf(w[j]) + tf(b[j]));
 }
 
@@ -163,14 +165,14 @@ __global__ void layernorm_bwd_dx(const T* __restrict__ x, const T* __restrict__ 
     const float mu = mean[blockIdx.x];
     const float r = rstd[blockIdx.x];
     float s1 = 0.0f, s2 = 0.0f;
-    for (int j = lane; j < D; j += 32) {
+    for (int j = lane; j < D; j += blockDim.x) {
         const float g = tf(dy[base + j]) * tf(w[j]);
         const float xhat = (tf(x[base + j]) - mu) * r;
         s1 += g; s2 += g * xhat;
     }
-    s1 = warp_sum_f(s1) / float(D);
-    s2 = warp_sum_f(s2) / float(D);
-    for (int j = lane; j < D; j += 32) {
+    s1 = rowreduce_sum_f(s1) / float(D);
+    s2 = rowreduce_sum_f(s2) / float(D);
+    for (int j = lane; j < D; j += blockDim.x) {
         const float g = tf(dy[base + j]) * tf(w[j]);
         const float xhat = (tf(x[base + j]) - mu) * r;
         dx[base + j] = ft<T>(r * (g - s1 - xhat * s2));
@@ -187,22 +189,22 @@ __global__ void layernorm_bwd_fused(const T* __restrict__ x, const T* __restrict
     const long base = (long)blockIdx.x * D;
     const int lane = threadIdx.x;
     float sx = 0.0f, sxx = 0.0f;
-    for (int j = lane; j < D; j += 32) {
+    for (int j = lane; j < D; j += blockDim.x) {
         const float xv = tf(x[base + j]);
         sx += xv; sxx += xv * xv;
     }
-    sx = warp_sum_f(sx); sxx = warp_sum_f(sxx);
+    sx = rowreduce_sum_f(sx); sxx = rowreduce_sum_f(sxx);
     const float mu = sx / float(D);
     const float r  = rsqrtf(sxx / float(D) - mu * mu + eps);
     float s1 = 0.0f, s2 = 0.0f;
-    for (int j = lane; j < D; j += 32) {
+    for (int j = lane; j < D; j += blockDim.x) {
         const float g = tf(dy[base + j]) * tf(w[j]);
         const float xhat = (tf(x[base + j]) - mu) * r;
         s1 += g; s2 += g * xhat;
     }
-    s1 = warp_sum_f(s1) / float(D);
-    s2 = warp_sum_f(s2) / float(D);
-    for (int j = lane; j < D; j += 32) {
+    s1 = rowreduce_sum_f(s1) / float(D);
+    s2 = rowreduce_sum_f(s2) / float(D);
+    for (int j = lane; j < D; j += blockDim.x) {
         const float dyv = tf(dy[base + j]);
         const float g = dyv * tf(w[j]);
         const float xhat = (tf(x[base + j]) - mu) * r;
@@ -226,29 +228,29 @@ __global__ void rms_norm_add_k(const T* __restrict__ x, const T* __restrict__ re
     const long base = (long)blockIdx.x * D;
     const int lane = threadIdx.x;
     float ms = 0.0f;
-    for (int j = lane; j < D; j += 32) {
+    for (int j = lane; j < D; j += blockDim.x) {
         const float v = tf(x[base + j]) + tf(residual[base + j]);
         res_out[base + j] = ft<T>(v);
         ms += v * v;
     }
-    ms = warp_sum_f(ms) / float(D);
+    ms = rowreduce_sum_f(ms) / float(D);
     const float inv = rsqrtf(ms + eps);
     if (!FP8) {
-        for (int j = lane; j < D; j += 32)
+        for (int j = lane; j < D; j += blockDim.x)
             o[base + j] = ft<T>(tf(res_out[base + j]) * inv * tf(w[j]));
         return;
     }
     float inv_scale = inv_scale_static;
     if (DYN) {
         float amax = 0.0f;
-        for (int j = lane; j < D; j += 32)
+        for (int j = lane; j < D; j += blockDim.x)
             amax = fmaxf(amax, fabsf(tf(res_out[base + j]) * inv * tf(w[j])));
-        amax = warp_max_f(amax);
+        amax = rowreduce_max_f(amax);
         const float s = amax / 448.0f;
         inv_scale = s > 0.0f ? 1.0f / s : 0.0f;
         if (lane == 0) scale_out[blockIdx.x] = s;
     }
-    for (int j = lane; j < D; j += 32)
+    for (int j = lane; j < D; j += blockDim.x)
         codes[base + j] = tme_e4m3_encode(tf(res_out[base + j]) * inv * tf(w[j]) * inv_scale);
 }
 
@@ -261,35 +263,35 @@ __global__ void layernorm_add_k(const T* __restrict__ x, const T* __restrict__ r
     const long base = (long)blockIdx.x * D;
     const int lane = threadIdx.x;
     float sx = 0.0f;
-    for (int j = lane; j < D; j += 32) {
+    for (int j = lane; j < D; j += blockDim.x) {
         const float v = tf(x[base + j]) + tf(residual[base + j]);
         res_out[base + j] = ft<T>(v);
         sx += v;
     }
-    const float mu = warp_sum_f(sx) / float(D);
+    const float mu = rowreduce_sum_f(sx) / float(D);
     float var = 0.0f;
-    for (int j = lane; j < D; j += 32) {
+    for (int j = lane; j < D; j += blockDim.x) {
         const float d = tf(res_out[base + j]) - mu;
         var += d * d;
     }
-    var = warp_sum_f(var) / float(D);
+    var = rowreduce_sum_f(var) / float(D);
     const float inv = rsqrtf(var + eps);
     if (!FP8) {
-        for (int j = lane; j < D; j += 32)
+        for (int j = lane; j < D; j += blockDim.x)
             o[base + j] = ft<T>((tf(res_out[base + j]) - mu) * inv * tf(w[j]) + tf(b[j]));
         return;
     }
     float inv_scale = inv_scale_static;
     if (DYN) {
         float amax = 0.0f;
-        for (int j = lane; j < D; j += 32)
+        for (int j = lane; j < D; j += blockDim.x)
             amax = fmaxf(amax, fabsf((tf(res_out[base + j]) - mu) * inv * tf(w[j]) + tf(b[j])));
-        amax = warp_max_f(amax);
+        amax = rowreduce_max_f(amax);
         const float s = amax / 448.0f;
         inv_scale = s > 0.0f ? 1.0f / s : 0.0f;
         if (lane == 0) scale_out[blockIdx.x] = s;
     }
-    for (int j = lane; j < D; j += 32)
+    for (int j = lane; j < D; j += blockDim.x)
         codes[base + j] = tme_e4m3_encode(((tf(res_out[base + j]) - mu) * inv * tf(w[j]) + tf(b[j])) * inv_scale);
 }
 
@@ -301,12 +303,12 @@ __global__ void softmax_fwd(const T* __restrict__ x, T* __restrict__ o, int D) {
     const long base = (long)blockIdx.x * D;
     const int lane = threadIdx.x;
     float m = -3.4028234663852886e38f;
-    for (int j = lane; j < D; j += 32) m = fmaxf(m, tf(x[base + j]));
-    m = warp_max_f(m);
+    for (int j = lane; j < D; j += blockDim.x) m = fmaxf(m, tf(x[base + j]));
+    m = rowreduce_max_f(m);
     float s = 0.0f;
-    for (int j = lane; j < D; j += 32) s += expf(tf(x[base + j]) - m);
-    s = warp_sum_f(s);
-    for (int j = lane; j < D; j += 32)
+    for (int j = lane; j < D; j += blockDim.x) s += expf(tf(x[base + j]) - m);
+    s = rowreduce_sum_f(s);
+    for (int j = lane; j < D; j += blockDim.x)
         o[base + j] = ft<T>(expf(tf(x[base + j]) - m) / s);
 }
 
@@ -501,16 +503,16 @@ __global__ void cross_entropy_fwd(const T* __restrict__ logits, const int* __res
         return;
     }
     float m = CE_NEG_INF, l = 0.0f, sx = 0.0f;
-    for (int i = lane; i < V; i += 32) {
+    for (int i = lane; i < V; i += blockDim.x) {
         const float x = ce_softcap(tf(logits[base + i]), softcap);
         sx += x;
         const float nm = fmaxf(m, x);
         l = l * expf(m - nm) + expf(x - nm);
         m = nm;
     }
-    const float M = warp_max_f(m);
-    l = warp_sum_f(l * expf(m - M));
-    sx = warp_sum_f(sx);
+    const float M = rowreduce_max_f(m);
+    l = rowreduce_sum_f(l * expf(m - M));
+    sx = rowreduce_sum_f(sx);
     const float lse = M + logf(l);
     const float x_y = ce_softcap(tf(logits[base + y]), softcap);
     const float eps = label_smoothing;
@@ -529,7 +531,7 @@ __global__ void cross_entropy_bwd(const T* __restrict__ logits, const int* __res
     const int lane = threadIdx.x;
     const int y = targets[blockIdx.x];
     if (y == ignore_index) {
-        for (int i = lane; i < V; i += 32) grad_logits[base + i] = ft<T>(0.0f);
+        for (int i = lane; i < V; i += blockDim.x) grad_logits[base + i] = ft<T>(0.0f);
         return;
     }
     const float lse = lse_in[blockIdx.x];
@@ -537,7 +539,7 @@ __global__ void cross_entropy_bwd(const T* __restrict__ logits, const int* __res
     const float eps = label_smoothing;
     const float zc = 1.0f + 2.0f * z_loss * lse;
     const float smooth = eps / float(V);
-    for (int i = lane; i < V; i += 32) {
+    for (int i = lane; i < V; i += blockDim.x) {
         const float capped = ce_softcap(tf(logits[base + i]), softcap);
         const float p = expf(capped - lse);
         float g = zc * p - smooth - (1.0f - eps) * ((i == y) ? 1.0f : 0.0f);

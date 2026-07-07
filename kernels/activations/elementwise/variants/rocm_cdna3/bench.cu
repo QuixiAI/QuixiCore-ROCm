@@ -25,44 +25,9 @@
 
 using namespace tme;
 
-// ---- 64-lane (full wavefront) reductions + row kernels (CDNA3 candidate) ----
-__device__ __forceinline__ float wsum64(float v) {
-    #pragma unroll
-    for (int o = 32; o > 0; o >>= 1) v += __shfl_xor(v, o);
-    return v;
-}
-__device__ __forceinline__ float wmax64(float v) {
-    #pragma unroll
-    for (int o = 32; o > 0; o >>= 1) v = fmaxf(v, __shfl_xor(v, o));
-    return v;
-}
-template <typename T>
-__global__ void rms_norm_fwd64(const T* __restrict__ x, const T* __restrict__ w,
-                               T* __restrict__ o, int D, float eps) {
-    const long base = (long)blockIdx.x * D;
-    const int lane = threadIdx.x;
-    float ss = 0.0f;
-    for (int j = lane; j < D; j += 64) { const float v = tf(x[base + j]); ss += v * v; }
-    ss = wsum64(ss);
-    const float inv = rsqrtf(ss / float(D) + eps);
-    for (int j = lane; j < D; j += 64)
-        o[base + j] = ft<T>(tf(x[base + j]) * inv * tf(w[j]));
-}
-template <typename T>
-__global__ void layernorm_fwd64(const T* __restrict__ x, const T* __restrict__ w,
-                                const T* __restrict__ b, T* __restrict__ o, int D, float eps) {
-    const long base = (long)blockIdx.x * D;
-    const int lane = threadIdx.x;
-    float sx = 0.0f;
-    for (int j = lane; j < D; j += 64) sx += tf(x[base + j]);
-    const float mu = wsum64(sx) / float(D);
-    float var = 0.0f;
-    for (int j = lane; j < D; j += 64) { const float d = tf(x[base + j]) - mu; var += d * d; }
-    var = wsum64(var) / float(D);
-    const float inv = rsqrtf(var + eps);
-    for (int j = lane; j < D; j += 64)
-        o[base + j] = ft<T>((tf(x[base + j]) - mu) * inv * tf(w[j]) + tf(b[j]));
-}
+// A/B is the SHIPPED kernels (tm_elementwise_kernels.cuh) at 32 vs 64 threads:
+// they are blockDim.x-aware (rowreduce_* over blockDim.x), so <<<M,32>>> is the
+// half-wavefront baseline and <<<M,64>>> is the landed full-wavefront version.
 
 // ---- timing ----------------------------------------------------------------
 template <typename F>
@@ -113,9 +78,9 @@ int main() {
         auto gbps = [&](double ms){ return bytes / (ms * 1e-3) / 1e9; };
 
         double r32 = time_ms([&]{ rms_norm_fwd<float><<<M, 32>>>(dx, dw, o, D, 1e-5f); });
-        double r64 = time_ms([&]{ rms_norm_fwd64<float><<<M, 64>>>(dx, dw, o, D, 1e-5f); });
+        double r64 = time_ms([&]{ rms_norm_fwd<float><<<M, 64>>>(dx, dw, o, D, 1e-5f); });
         double l32 = time_ms([&]{ layernorm_fwd<float><<<M, 32>>>(dx, dw, db, o, D, 1e-5f); });
-        double l64 = time_ms([&]{ layernorm_fwd64<float><<<M, 64>>>(dx, dw, db, o, D, 1e-5f); });
+        double l64 = time_ms([&]{ layernorm_fwd<float><<<M, 64>>>(dx, dw, db, o, D, 1e-5f); });
 
         printf("%-10d %-7d | %8.4f / %7.1f | %8.4f / %7.1f | %8.4f / %7.1f | %8.4f / %7.1f\n",
                M, D, r32, gbps(r32), r64, gbps(r64), l32, gbps(l32), l64, gbps(l64));
