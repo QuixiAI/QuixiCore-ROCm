@@ -23,3 +23,14 @@ EXTRA_HIPFLAGS += -DHIP_ENABLE_WARP_SYNC_BUILTINS -ffast-math
 EXTRA_ICXXFLAGS += --save-temps
 
 include ../../../../common.mk
+
+# --- standalone MFMA-attention correctness + perf harnesses (self-checking) ---
+SA_FLAGS := -std=c++17 -O3 --offload-arch=gfx942 -Wno-unused-value
+BENCH_SHAPE := -DATTN_B=4 -DATTN_H=32 -DATTN_H_KV=8 -DATTN_N=2048 -DATTN_D=128
+test:
+	/opt/rocm/bin/hipcc $(SA_FLAGS) attn_mfma.cu -o attn_mfma.out
+	HIP_VISIBLE_DEVICES=0 ./attn_mfma.out
+bench:
+	/opt/rocm/bin/hipcc $(SA_FLAGS) $(BENCH_SHAPE) attn_bench.cu -o attn_bench.out
+	HIP_VISIBLE_DEVICES=0 ./attn_bench.out
+.PHONY: test bench

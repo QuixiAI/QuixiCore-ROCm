@@ -567,6 +567,39 @@ sizes (norm path still ~2.2-3.1 TB/s vs ~5.3 TB/s HBM3 peak).
 
 Raw: perf/results/2026-07-07/elementwise-64lane/bench_ab.txt.
 
+## 2026-07-07: Attention Forward MFMA-Tiling — LANDED (13-16x)
+
+Status: landed. The naive one-wavefront-per-query GQA forward is replaced by an
+MFMA-tiled flash kernel.
+
+Implementation: `kernels/attention/gqa/variants/rocm_cdna3/attn_kernel.cuh`
+(+ gqa_causal). One 64-lane wavefront per BQ=16 query block; K/V block reused
+across all 16 queries; bf16 MFMA (v_mfma_f32_16x16x16_bf16) for QK^T and P@V; the
+softmax reduces over an LDS transpose of S (lane-owns-full-row), avoiding the
+distributed-MFMA-layout reduction that broke the CDNA4 kernel. Keeps the
+attn_globals/dispatch_micro interface (raw pointers via &g.Qg[{0,0,0,0}]); the
+naive kernel is retained as the correctness oracle in attn_bench.cu / attn_mfma.cu.
+
+Correctness: fp32 host oracle (harness.cpp) 0.21% non-causal / 0.19% causal;
+standalone attn_mfma.cu 0.21% (D=128 GQA, D=64 MHA, larger shapes); PyTorch SDPA
+(verify_sdpa.py, repo venv torch 2.12.1+rocm7.2, no LD_PRELOAD) 0.023% at full
+shape B16 H64 H_KV8 N2048 D128. All PASS (<0.02 rel gate).
+
+Perf A/B (MI300X, B4 H32 H_KV8 N2048 D128, HIP-event median):
+| | naive | MFMA | speedup |
+|---|---|---|---|
+| non-causal | 47.1 ms / 5.8 TFLOP/s | 2.83 ms / 97.3 TFLOP/s | 16.65x |
+| causal     | 24.1 ms / 5.7 TFLOP/s | 1.78 ms / 77.2 TFLOP/s | 13.51x |
+
+Decision: KEEP. The naive kernel reloaded K/V per query (O(N) per query,
+memory-bound); the tiled kernel reuses each K/V block across 16 queries and runs
+the matmuls on MFMA. Follow-ups (deferred): LDS-stage K/V (currently loaded from
+global per fragment), larger BQ query blocks + multi-wavefront for more reuse,
+and K/V double-buffering (97 TFLOP/s vs ~1300 bf16 peak leaves headroom). Also:
+MFMA-tile the attention backward.
+
+Raw: perf/results/2026-07-07/attention-mfma/.
+
 ## Current Baseline Sources
 
 Status: baselines exist, not yet normalized into the shared harness.

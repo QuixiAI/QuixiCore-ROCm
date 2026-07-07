@@ -273,9 +273,9 @@ operations:
     path: kernels/attention/gqa
     variants:
       - name: rocm_cdna3
-        status: implemented
+        status: optimized
         path: kernels/attention/gqa/variants/rocm_cdna3
-        notes: Correct CDNA3 online-softmax forward; validated vs PyTorch SDPA (~0.15%).
+        notes: MFMA-tiled flash forward, 16.65x over naive (97 TFLOP/s); vs SDPA 0.023%.
       - name: rocm_cdna4
         status: implemented
         path: kernels/attention/gqa/variants/rocm_cdna4
@@ -299,9 +299,9 @@ operations:
     path: kernels/attention/gqa_causal
     variants:
       - name: rocm_cdna3
-        status: implemented
+        status: optimized
         path: kernels/attention/gqa_causal/variants/rocm_cdna3
-        notes: Correct CDNA3 causal online-softmax forward; validated vs SDPA is_causal (~0.14%).
+        notes: MFMA-tiled causal flash forward, 13.5x over naive (77 TFLOP/s).
       - name: rocm_cdna4
         status: implemented
         path: kernels/attention/gqa_causal/variants/rocm_cdna4

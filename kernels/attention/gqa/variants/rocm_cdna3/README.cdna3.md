@@ -44,3 +44,13 @@ Correctness-first: O(N) per query with no K/V reuse across queries — correct b
 bandwidth-bound. An MFMA-tiled flash version (reusing `tm_qmm_mfma.cuh` for
 QK^T/PV with block K/V reuse) is the performance follow-up; this kernel is the
 verified correctness baseline and oracle for it.
+
+## Update (2026-07-07): MFMA-tiled — the shipped kernel
+
+`attn_kernel.cuh` is now an **MFMA-tiled flash** kernel (one 64-lane wavefront per
+BQ=16 query block; K/V reused across the block; bf16 MFMA for QK^T and P@V;
+softmax over an LDS transpose of S). **16.65x (non-causal) / 13.5x (causal)** over
+the naive kernel — ~97 / 77 TFLOP/s. Validated vs the fp32 host oracle (0.21%) and
+PyTorch SDPA (0.023%). The naive online-softmax kernel is retained as the oracle in
+`attn_mfma.cu` / `attn_bench.cu`. `make test` = fp32 oracle; `make bench` = naive-vs-MFMA A/B.
+Follow-ups: LDS-stage K/V, larger query blocks, K/V double-buffering, MFMA backward.
