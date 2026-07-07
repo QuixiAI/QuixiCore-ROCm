@@ -662,6 +662,134 @@ into the production serving dispatch.
 
 Raw: perf/results/2026-07-07/qgemm-wide/bench.txt.
 
+## 2026-07-07: qgemm LDS-Staged Wide Tile — REJECTED
+
+Status: rejected (correct, but slower than the current register-fragment wide
+kernel).
+
+Current implementation: `kernels/quantization/qgemm/variants/rocm_cdna3`.
+Shipped path remains `qgemm_wide<FMT,NT>` / `qflux_gelu_wide<FMT,NT>` with
+`qgemm_pick_nt`. Bench-only comparators now include `qgemm_wide2d<FMT,MT,NT>`
+(2D register tile) and `qgemm_wide_lds<NT>` (coalesced fp16_raw X/W loads into
+ping-pong LDS buffers, same MFMA fragment math).
+
+Current public route: no routing change; `qgemm_wide_lds` exists only in
+`qgemm_bench.cu`.
+
+References inspected: `qgemm_bench.cu`, `qgemm.cu`, `qflux.cu`,
+`tm_qmm_mfma.cuh`, prior qgemm-wide entry above, and `perf/perf.md`.
+
+Correctness: `qgemm_wide_lds<4>` is bit-identical to the base fp16_raw kernel
+on all three A/B shapes (`diff 0`). `make test` also passes the existing qgemm
+/ qflux golden suite across the quant format matrix: qgemm, qgemm-ksplit,
+qgemm-wide, qflux, and qflux-wide all PASS.
+
+Baseline / experiment: MI300X gfx942, `HIP_VISIBLE_DEVICES=0`, Ubuntu 22.04.5,
+driver 6.16.13, ROCm/HIP 7.2.53211 (`hipcc` from ROCm 7.2.4), no container
+image exposed (`/.dockerenv` absent, `/proc/1/cgroup` = `/init.scope`), native
+HIP benchmark with no framework dependency. Repo venv available via
+`source ~/QuixiCore/QuixiCore-ROCm/.venv/bin/activate`: PyTorch
+2.12.1+rocm7.2, `torch.version.hip` 7.2.53211, MI300X visible. Git
+`16c7fd636b1d7d54de4913e8e1a95178d4a33676` plus local bench candidate. Command:
+`make bench` in `kernels/quantization/qgemm/variants/rocm_cdna3`. Dtype/format:
+fp16_raw X/W, fp32 accumulate/output, `N=K=4096`, NT=4. Timing: HIP events,
+10 warmups, 50 iterations, median.
+
+| M | base NT=1 | wide NT=4 | wide2d 2x2 | wideLDS NT=4 |
+|---|---|---|---|---|
+| 64 | 31.2 TFLOP/s | 18.9 | 22.0 | 4.3 |
+| 256 | 33.5 TFLOP/s | 49.6 | 48.7 | 15.9 |
+| 2048 | 36.1 TFLOP/s | 55.6 | 55.7 | 33.2 |
+
+Decision: REJECT the per-wave LDS-staged wide tile. Coalescing the global loads
+does not offset the extra global->LDS stores, LDS reads, and per-K-step barriers;
+the candidate is 0.23-0.60x of the current wide kernel and even loses to base at
+large M. The 2D register tile tying the current 1D wide kernel confirms register
+reuse is already exhausted for this one-wavefront tile shape. The remaining
+qgemm headroom requires a different geometry: a multi-wave CTA GEMM tile with
+LDS-staged A/B reused across several wavefronts (or a library-backed dense path
+where quant/dequant semantics allow), not a single-wavefront LDS wrapper.
+
+Raw results: `perf/results/2026-07-07/qgemm-lds/bench.txt` and
+`perf/results/2026-07-07/qgemm-lds/make_test.txt`.
+
+## 2026-07-07: qgemm Multi-Wave CTA LDS Tile — CANDIDATE
+
+Status: candidate kept in qgemm correctness/bench harness; packed q8_0/q4_0
+large-M timing confirms the win. Public routing remains deferred until the
+broader format sweep and qflux mirror are complete.
+
+Current implementation: `kernels/quantization/qgemm/variants/rocm_cdna3`.
+`qgemm_bench.cu` now includes `qgemm_cta_lds<MT,NT>` for fp16_raw timing, and
+`qgemm.cu` includes the generalized `qgemm_cta_lds<FMT,MT,NT>` path. The
+candidate uses a 4-wave CTA (`MT=4`, `NT=4`) for a 64x64 output tile: each
+wavefront owns one 16-row tile and all four wavefronts share the same 64-column
+W tile from LDS. This is the multi-wave version of the LDS hypothesis rejected
+above; the key difference is actual W/dequant reuse across M tiles.
+
+Current public route: no dispatcher change. Existing decode path remains
+K-split; existing medium path remains register-fragment wide/2D. CTA-LDS should
+only be considered for prefill-scale `M>=1024` and `N % 64 == 0`; q8_0/q4_0 are
+confirmed, while fp8/nvfp4/superblock formats still need timing.
+
+References inspected: `qgemm_bench.cu`, `qgemm.cu`, `tm_qmm_mfma.cuh`, the
+rejected single-wave LDS entry above, and `perf/perf.md`.
+
+Correctness: `qgemm_cta_lds<4,4>` is bit-identical to base in the fp16_raw bench
+(`diff 0` on every measured shape). `make test` validates the generalized
+`qgemm_cta_lds<FMT,4,4>` across the golden quant format matrix; qgemm base,
+K-split, wide, and CTA-LDS all PASS. qflux base/wide remains PASS; qflux CTA-LDS
+is not mirrored yet.
+
+Baseline / experiment: MI300X gfx942, `HIP_VISIBLE_DEVICES=0`, Ubuntu 22.04.5,
+driver 6.16.13, ROCm/HIP 7.2.53211 (`hipcc` from ROCm 7.2.4), repo venv PyTorch
+2.12.1+rocm7.2 active, native HIP timing. Git
+`16c7fd636b1d7d54de4913e8e1a95178d4a33676` plus local candidate. Commands:
+`make bench`; additional direct `./qgemm_bench.out <M> <N> <K>` sweeps; generated
+q8_0/q4_0 packed large-M golden data under the raw results directory and ran
+`./qgemm.out <golden_dir>`. Synthetic timing: fp16_raw X/W, fp32
+accumulate/output. Packed timing: q8_0 and q4_0, `M=1024,N=K=4096`. Timing:
+HIP events, 10 warmups, 50 iterations, median for `qgemm_bench`; qgemm format
+harness uses 50-iteration HIP-event averages.
+
+| shape | base NT=1 | wide NT=4 | wide2d 2x2 | ctaLDS 4x4 |
+|---|---|---|---|---|
+| M64 N4096 K4096 | 31.0 | 19.1 | 22.1 | 5.1 |
+| M256 N4096 K4096 | 33.7 | 49.6 | 50.3 | 19.5 |
+| M512 N4096 K4096 | 35.5 | 56.6 | 57.5 | 38.7 |
+| M1024 N4096 K4096 | 35.9 | 55.8 | 54.1 | 64.6 |
+| M2048 N4096 K4096 | 36.1 | 55.4 | 55.3 | 85.8 |
+| M4096 N4096 K4096 | 37.0 | 54.7 | 56.0 | 87.6 |
+| M8192 N4096 K4096 | 37.5 | 55.2 | 59.8 | 91.2 |
+| M1024 N11008 K4096 | 34.7 | 31.7 | 52.6 | 62.4 |
+| M2048 N11008 K4096 | 35.1 | 32.7 | 57.6 | 70.9 |
+| M2048 N14336 K4096 | 34.1 | 48.0 | 62.6 | 80.2 |
+
+Packed-format timing (`M=1024,N=K=4096`):
+
+| format | base | wide NT=4 | ctaLDS 4x4 |
+|---|---|---|---|
+| q8_0 | 25.15 TFLOP/s | 33.39 | 59.86 |
+| q4_0 | 12.64 TFLOP/s | 14.68 | 53.69 |
+
+Decision: KEEP as a qgemm candidate for prefill-scale shapes. The measured win
+starts around M=1024 and reaches +55-65% vs current wide on N=K=4096 at
+M>=2048, and +67-117% on LLM rectangle N. Packed q8_0/q4_0 large-M timing also
+wins (+79% and +266% vs current wide), so the dequant work does not erase the
+geometry win for the simple packed formats. Reject for decode/small M: CTA-LDS
+is 0.17x of base at M=64 and 0.39x of wide at M=256. The result confirms LDS is
+only useful when it creates cross-wave W/dequant reuse; single-wave LDS staging
+remains rejected. Before routing this as a shipped qgemm path, finish fp8/nvfp4
+and superblock format timing, then mirror the epilogue into qflux if the qgemm
+format sweep holds.
+
+Raw results: `perf/results/2026-07-07/qgemm-cta-lds/bench.txt`,
+`perf/results/2026-07-07/qgemm-cta-lds/sweep_m.txt`,
+`perf/results/2026-07-07/qgemm-cta-lds/llm_rectangles.txt`,
+`perf/results/2026-07-07/qgemm-cta-lds/make_test.txt`,
+`perf/results/2026-07-07/qgemm-cta-lds/make_test_after_m_arg.txt`,
+and `perf/results/2026-07-07/qgemm-cta-lds/packed_m1024.txt`.
+
 ## 2026-07-07: Collective+GEMM Compute/Comm Overlap (chunked RCCL) — REJECTED
 
 Status: rejected for perf (correct, but slower than the non-overlapped fused path
@@ -781,6 +909,71 @@ deferred as a scoped follow-up; the integration path (init, symmetric heap, corr
 collectives) is now de-risked. iris_allreduce.py kept as the Iris smoke test/comparator.
 
 Raw: 2 GPUs 2048^2 iris 4.04ms/4GB/s vs rccl 0.398ms/42GB/s (0.10x), correctness PASS.
+
+## 2026-07-07: Remaining CUDA Functional Coverage To CDNA3 — LANDED
+
+Status: landed. Functional CDNA3 coverage added for the CUDA-only gaps identified
+in the parity plan: norm quantization, qgemm act-order/block-scale variants,
+dense int8 GEMM, dense MXFP8/NVFP4 GEMM, standalone collectives, and FP8
+ag_gemm/gemm_rs. These are correctness-first routes; only measured keep/reject
+decisions below are claimed.
+
+Environment: AMD Instinct MI300X (`gfx942`), HIP 7.2.53211 / ROCm clang
+22.0.0git roc-7.2.4, repo venv PyTorch 2.12.1+rocm7.2, `torch.cuda` sees 8 GPUs.
+Standalone HIP runs use `HIP_VISIBLE_DEVICES=0`; collective runs use torchrun
+one-process-per-GPU on GPUs 0,1.
+
+Current implementation / public routes:
+- `kernels/norms/norm_quant/variants/rocm_cdna3`: RMSNorm quant FP8/INT8,
+  residual output, AZP int8, per-token-group int8.
+- `kernels/quantization/qgemm/variants/rocm_cdna3/qgemm_variants.cu`:
+  `qgemm_actorder` and `qgemm_blockscale`.
+- `kernels/matmul/int8/variants/rocm_cdna3`: exact `int8 x int8 -> int32`
+  dense GEMM.
+- `kernels/matmul/{mxfp8,nvfp4}/variants/rocm_cdna3`: dense block-scaled GEMM
+  via explicit dequant + fp32 GEMM baseline.
+- `kernels/collectives/{all_gather,all_to_all,reduce_scatter}/variants/rocm_cdna3`
+  and `kernels/collectives/gemm_collectives/variants/rocm_cdna3/test-fp8`.
+
+Correctness:
+- Norm quant: 8/8 checks PASS; representative rel errors: fp8 dynamic RMS
+  2.261e-02, int8 dynamic RMS 7.656e-03, residual 1.929e-03, AZP dynamic
+  3.918e-03, group int8 3.855e-03.
+- QGEMM variants: act-order q4_0 PASS rel 8.628e-07; blockscale fp8_raw PASS
+  rel 1.982e-05.
+- Int8 GEMM: exact PASS, 0 mismatches.
+- MXFP8/NVFP4 GEMM: PASS vs host double reference; MXFP8 fused/explicit rel
+  9.284e-07, NVFP4 fused/explicit rel 0.
+- Collectives: all_gather, all_to_all, reduce_scatter, ag_gemm_fp8, gemm_rs_fp8
+  all PASS on 2 MI300X ranks.
+
+Focused timing / decisions (HIP-event median; repeat ranges are min/max of
+three later median runs where collected):
+
+| Kernel | Shape | Baseline | Candidate | Decision |
+|---|---|---:|---:|---|
+| norm_quant int8 dyn | M=16384 D=4096 fp16 | block128 0.109-0.112 ms | block256 0.107-0.111 ms | TIE, no speedup claim |
+| qgemm_actorder q4_0 | M=64 N=128 K=256 | new route | 0.015 ms | KEEP direct MFMA |
+| qgemm_blockscale fp8_raw | M=64 N=128 K=256 | new route | 0.013-0.014 ms | KEEP direct MFMA |
+| int8 GEMM | M=N=256 K=512 | scalar 0.038 ms | sdot4 0.021 ms | KEEP sdot4 |
+| MXFP8 GEMM | M=N=64 K=256 | fused 0.083 ms | explicit+fp32 0.045 ms | KEEP explicit+fp32 |
+| NVFP4 GEMM | M=N=64 K=256 | fused 0.138 ms | explicit+fp32 0.045-0.046 ms | KEEP explicit+fp32 |
+| all_gather | 2 GPUs, n=1048576 | RCCL route | 0.114 ms | correctness route |
+| all_to_all | 2 GPUs, chunk=262144 | RCCL route | 0.047 ms | correctness route |
+| reduce_scatter | 2 GPUs, n=1048576 | RCCL route | 0.135 ms | correctness route |
+| ag_gemm_fp8 | 2 GPUs, 256x256x512 | torch/RCCL route | 0.161 ms | correctness route |
+| gemm_rs_fp8 | 2 GPUs, 256x256x512 | torch/RCCL route | 0.246 ms | correctness route |
+
+Decision: KEEP the landed functional coverage. Norm-quant block128/block256 is
+within noise on the measured shape, so no block-size performance route change is
+claimed. For the dense block-scaled GEMMs,
+explicit dequant + fp32 GEMM is the kept CDNA3 baseline because scalar fused
+decode is slower on the measured shape. The B200/H100/Ampere implementations
+remain architecture-specific references, not source to copy. Follow-up work is
+optimization: MFMA/LDS dense block-scaled kernels, larger int8 tiling, and
+full-node collective sweeps.
+
+Raw results: `perf/results/2026-07-07/cdna3-port-fill/raw-summary.txt`.
 
 ## Current Baseline Sources
 

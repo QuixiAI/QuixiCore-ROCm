@@ -27,16 +27,23 @@ These native ROCm CDNA3 variants exist today and compile with ROCm 7.2.4 for
 | Rotary | `kernels/attention/rotary/variants/rocm_cdna3` | build-valid | blocked by non-ROCm PyTorch in this environment |
 | LayerNorm | `kernels/norms/layernorm/variants/rocm_cdna3` | build-valid | blocked by non-ROCm PyTorch in this environment |
 | RMSNorm | `kernels/norms/rmsnorm/variants/rocm_cdna3` | build-valid | blocked by non-ROCm PyTorch in this environment |
+| Norm quant | `kernels/norms/norm_quant/variants/rocm_cdna3` | build-valid | 8/8 checks pass on MI300X; block128/block256 timing A/B recorded with no stable speedup claim. |
 | BF16 FP32 GEMM | `kernels/matmul/bf16fp32/variants/rocm_cdna3/8192_256_256_64_16` | build-valid | blocked by non-ROCm PyTorch in this environment |
 | FP8 FP32 GEMM | `kernels/matmul/fp8fp32/variants/rocm_cdna3/8192_256_256_64_32` | build-valid | blocked by non-ROCm PyTorch in this environment |
+| INT8 GEMM | `kernels/matmul/int8/variants/rocm_cdna3` | build-valid | Exact int8xint8->int32 PASS; scalar vs sdot4 timing recorded. |
+| MXFP8 GEMM | `kernels/matmul/mxfp8/variants/rocm_cdna3` | build-valid | Explicit dequant + fp32 GEMM PASS vs host double reference. |
+| NVFP4 GEMM | `kernels/matmul/nvfp4/variants/rocm_cdna3` | build-valid | Explicit dequant + fp32 GEMM PASS vs host double reference. |
 | Scaled FP8 matmul | `kernels/matmul/scaled_matmul/variants/rocm_cdna3` | build-valid | standalone binary builds; no normalized benchmark run yet |
 | Elementwise/Norm family | `kernels/activations/elementwise/variants/rocm_cdna3` | build-valid | 56/56 fp64-oracle checks pass on MI300X; perf A/B recorded in `perf/optimization_status.md` |
 | Quant dequant + GEMV | `kernels/quantization/qgemv/variants/rocm_cdna3` | build-valid | 29/29 format dequant EXACT + GEMV PASS, W8A8/W2A8 int8 GEMV PASS, runtime-quant 4/4 PASS on MI300X. Tensor-core qgemm deferred to MFMA pass. |
 | Serving family | `kernels/serving/variants/rocm_cdna3` | build-valid | 12/12 self-checking harnesses pass on MI300X (paged attn, MLA, kv_cache, sampling, spec-decode, …). |
 | MoE (routing + grouped GEMM) | `kernels/moe/variants/rocm_cdna3` | build-valid | 8/8 checks pass on MI300X (end-to-end MoE MLP vs fp64). |
 | Quant tensor-core GEMM (MFMA) | `kernels/quantization/qgemm/variants/rocm_cdna3` | build-valid | PTX mma.sync.m16n8k16 rewritten to v_mfma_f32_16x16x16_f16. qgemm 58/58 + qflux 29/29 PASS on MI300X. |
+| QGEMM variants | `kernels/quantization/qgemm/variants/rocm_cdna3/qgemm_variants.cu` | build-valid | qgemm_actorder and qgemm_blockscale PASS vs fp64 references on MI300X. |
 | Quant MoE GEMMs (MFMA) | `kernels/moe/variants/rocm_cdna3_quant` | build-valid | fp8/nvfp4/wna16 grouped GEMMs on MFMA + plain silu/quant/routing; ALL PASS vs fp64. |
 | lm_head + turboquant + mf_primitives | `kernels/quantization/{lm_head,turboquant}/variants/rocm_cdna3` | build-valid | lm_head sampling 20/20; turboquant/mf_primitives ALL PASS on MI300X. |
+| Standalone collectives | `kernels/collectives/{all_gather,all_to_all,reduce_scatter}/variants/rocm_cdna3` | script-valid | RCCL torchrun wrappers PASS on 2 MI300X ranks. |
+| FP8 GEMM collectives | `kernels/collectives/gemm_collectives/variants/rocm_cdna3` | script-valid | ag_gemm_fp8 and gemm_rs_fp8 PASS on 2 MI300X ranks. |
 
 ### Runtime environment update (2026-07-06)
 
@@ -64,7 +71,7 @@ directly on the gfx942 GPUs. The system CUDA PyTorch was left untouched.
 | `gemm/baselines/bf16_cublas` | `perf/baselines/matmul/bf16fp32` | planned | Use rocBLAS, hipBLASLt, CK, AITER, or Triton/ROCm as ROCm baselines. |
 | `gemm/baselines/bf16_cublas_lt` | `perf/baselines/matmul/bf16fp32` | planned | Use hipBLASLt or CK instead of cuBLASLt. |
 | `gemm/baselines/fp8_cublas_lt` | `perf/baselines/matmul/fp8fp32` | planned | Use hipBLASLt, CK, AITER, or Triton/ROCm for FP8 baselines. |
-| `gemm/baselines/int8_cublas_lt` | `perf/baselines/matmul/int8` | planned | Use ROCm library baselines; no active CDNA3 INT8 matmul path yet. |
+| `gemm/baselines/int8_cublas_lt` | `perf/baselines/matmul/int8` | planned | Use ROCm library baselines against the active CDNA3 int8 GEMM route. |
 | `gemm/baselines/mxfp8_cublas_lt` | `perf/baselines/matmul/mxfp8` | capability-gated | cuBLASLt MXFP8 baseline has no direct ROCm equivalent in this repo. |
 | `gemm/baselines/nvfp4_cublas_lt` | `perf/baselines/matmul/nvfp4` | capability-gated | NVFP4 cuBLASLt baseline has no direct ROCm equivalent in this repo. |
 | `gemm/bf16_b200` | `kernels/matmul/bf16fp32` | partial | Covered only by existing shape-specific CDNA3 BF16 GEMM. |
@@ -75,11 +82,11 @@ directly on the gfx942 GPUs. The system CUDA PyTorch was left untouched.
 | `gemm/fp8_b200` | `kernels/matmul/fp8fp32` | partial | B200-specific route needs CDNA3-specific implementation or library baseline. |
 | `gemm/fp8_h100` | `kernels/matmul/fp8fp32` | partial | H100 route needs CDNA3-specific implementation or library baseline. |
 | `gemm/fp8_h100_scaled` | `kernels/matmul/scaled_matmul` | partial | Existing CDNA3 scaled matmul builds; needs correctness and perf run. |
-| `gemm/int8_ampere` | `kernels/matmul/int8` | planned | No active CDNA3 INT8 matmul path yet. |
-| `gemm/int8_b200` | `kernels/matmul/int8` | planned | B200-specific implementation is not portable as-is. |
-| `gemm/int8_h100` | `kernels/matmul/int8` | planned | H100-specific implementation is not portable as-is. |
-| `gemm/mxfp8_b200` | `kernels/matmul/mxfp8` | capability-gated | CDNA4 scaled-MFMA MXFP8 copy does not map directly to gfx942. |
-| `gemm/nvfp4_b200` | `kernels/matmul/nvfp4` | capability-gated | NVFP4 and B200 path need an AMD format and instruction strategy. |
+| `gemm/int8_ampere` | `kernels/matmul/int8/variants/rocm_cdna3` | active, build-valid | Exact int8xint8->int32 route added; sdot4 beats scalar on the measured MI300X harness shape. |
+| `gemm/int8_b200` | `kernels/matmul/int8/variants/rocm_cdna3` | active, build-valid | Semantic coverage only; B200-specific implementation is not portable as-is. |
+| `gemm/int8_h100` | `kernels/matmul/int8/variants/rocm_cdna3` | active, build-valid | Semantic coverage only; H100-specific implementation is not portable as-is. |
+| `gemm/mxfp8_b200` | `kernels/matmul/mxfp8/variants/rocm_cdna3` | active, build-valid | Correctness-first explicit dequant + fp32 GEMM route; B200/CDNA4 scaled-MFMA mechanics remain architecture-specific. |
+| `gemm/nvfp4_b200` | `kernels/matmul/nvfp4/variants/rocm_cdna3` | active, build-valid | Correctness-first explicit dequant + fp32 GEMM route; B200 tensor-memory route is not portable as-is. |
 | `hedgehog` | `kernels/linear_attention/hedgehog/variants/rocm_cdna3` | active | Hybrid dual-softmax-feature linear + windowed-exact attention; vs fp64 PASS ~0.16%. |
 | `layernorm` | `kernels/norms/layernorm` | active, build-valid | CDNA3 path exists; correctness/perf needs ROCm PyTorch environment. |
 | `lin_attn_tm` | `kernels/linear_attention/variants/rocm_cdna3` | active, build-valid | GDN + linear-attention (non-causal/causal/chunk/complex) ALL PASS on MI300X. |
@@ -88,19 +95,19 @@ directly on the gfx942 GPUs. The system CUDA PyTorch was left untouched.
 | `moe` | `kernels/moe/variants/rocm_cdna3` | active, build-valid | Routing + grouped-GEMM MoE MLP ported; 8/8 checks pass on MI300X (end-to-end MoE MLP vs fp64 5.9e-7). |
 | `moe_quant` | `kernels/moe/variants/rocm_cdna3_quant` | active, build-valid | 3 quantized grouped GEMMs (fp8/nvfp4/wna16) rewritten to MFMA + plain silu/quant/routing; ALL PASS vs fp64 on MI300X. |
 | `parallel/ag_gemm` | `kernels/collectives/gemm_collectives/variants/rocm_cdna3` | active | ag_gemm (collective o local GEMM) validated across 4 & 8 MI300X via torchrun+RCCL. Overlap = follow-up. |
-| `parallel/ag_gemm_fp8` | `kernels/collectives/ag_gemm_fp8` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
-| `parallel/all_gather` | `kernels/collectives/all_gather` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
-| `parallel/all_reduce` | `kernels/collectives/all_reduce/variants/rocm_cdna3` | active | RCCL all_reduce + reduce_scatter verified across 8 MI300X (multimem/NVLS -> RCCL). all_gather/all_to_all same path. Fused ag_gemm/gemm_rs -> Iris follow-up. |
+| `parallel/ag_gemm_fp8` | `kernels/collectives/gemm_collectives/variants/rocm_cdna3` | active | FP8 payload all_gather as uint8 view + local dequant GEMM validated on 2 MI300X ranks. |
+| `parallel/all_gather` | `kernels/collectives/all_gather/variants/rocm_cdna3` | active | Standalone torchrun+RCCL wrapper validated on 2 MI300X ranks. |
+| `parallel/all_reduce` | `kernels/collectives/all_reduce/variants/rocm_cdna3` | active | RCCL all_reduce + reduce_scatter verified across 8 MI300X (multimem/NVLS -> RCCL). |
 | `parallel/all_reduce_educational` | `kernels/collectives/all_reduce` | planned | Educational CUDA path should not be imported as production coverage. |
-| `parallel/all_to_all` | `kernels/collectives/all_to_all` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
+| `parallel/all_to_all` | `kernels/collectives/all_to_all/variants/rocm_cdna3` | active | Standalone torchrun+RCCL wrapper validated on 2 MI300X ranks. |
 | `parallel/gemm_ar` | `kernels/collectives/gemm_collectives/variants/rocm_cdna3` | active | gemm_ar (collective o local GEMM) validated across 4 & 8 MI300X via torchrun+RCCL. Overlap = follow-up. |
 | `parallel/gemm_rs` | `kernels/collectives/gemm_collectives/variants/rocm_cdna3` | active | gemm_rs (collective o local GEMM) validated across 4 & 8 MI300X via torchrun+RCCL. Overlap = follow-up. |
-| `parallel/gemm_rs_fp8` | `kernels/collectives/gemm_rs_fp8` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
+| `parallel/gemm_rs_fp8` | `kernels/collectives/gemm_collectives/variants/rocm_cdna3` | active | Local FP8 shard GEMM + reduce_scatter validated on 2 MI300X ranks. |
 | `parallel/moe_dispatch_gemm` | `kernels/collectives/moe_dispatch_gemm` and `kernels/moe` | capability-gated | Needs MoE route plus distributed runtime design. |
-| `parallel/reduce_scatter` | `kernels/collectives/reduce_scatter` | capability-gated | Requires distributed ROCm/RCCL design and validation. |
+| `parallel/reduce_scatter` | `kernels/collectives/reduce_scatter/variants/rocm_cdna3` | active | Standalone torchrun+RCCL wrapper validated on 2 MI300X ranks. |
 | `parallel/ring_attn` | `kernels/collectives/ring_attn` and `kernels/attention` | capability-gated | Requires distributed attention design and validation. |
 | `parallel/ulysses_attn` | `kernels/collectives/ulysses_attn` and `kernels/attention` | capability-gated | Requires distributed attention design and validation. |
-| `quant` | `kernels/quantization` | partial | Dequant + fp16/int8 GEMV + runtime-quant ported to `quantization/qgemv/variants/rocm_cdna3`: 29/29 format dequant EXACT + GEMV PASS, W8A8/W2A8 PASS, runtime-quant 4/4 PASS on MI300X (`__dp4a`->`__builtin_amdgcn_sdot4`). Tensor-core qgemm/lm_head/qflux (`tm_qmm.cuh` PTX `mma.sync`) deferred to the MFMA pass. |
+| `quant` | `kernels/quantization` | active | Dequant + fp16/int8 GEMV + runtime-quant, MFMA qgemm/qflux, and qgemm_actorder/qgemm_blockscale are ported and correctness-valid on MI300X. |
 | `rotary` | `kernels/attention/rotary` | active, build-valid | CDNA3 path exists; correctness/perf needs ROCm PyTorch environment. |
 | `serving` | `kernels/serving/variants/rocm_cdna3` | active, build-valid | All 12 self-checking harnesses pass on MI300X (paged attn v1/v2, GQA-staged, attn_q, attn_varlen, MLA, rope_kv, kv_cache, sampling, logits, beam, spec_beam, eagle, sparse) — 104 pass-lines, 0 fail. |
 | `tm_cuda` | operation-specific ROCm directories | not-portable-as-is | Python/CUDA extension aggregator should be decomposed into native ROCm operations. |

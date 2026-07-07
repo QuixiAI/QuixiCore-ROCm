@@ -5,14 +5,18 @@ GPU_TARGET ?= CDNA3
 HIPCC ?= /opt/rocm/bin/hipcc
 HIPFLAGS ?= -std=c++17 -O3 --offload-arch=gfx942 -Wno-unused-value
 GOLDEN ?= ../../../../../../QuixiCore-CUDA/kernels/quant/golden
-all: qgemm.out qflux.out
+all: qgemm.out qflux.out qgemm_variants.out
 qflux.out: qflux.cu tm_qmm_mfma.cuh quant_formats.cuh quant_formats_tables.cuh quant_tables.cuh
 	$(HIPCC) $(HIPFLAGS) $< -o $@
 
 qgemm.out: qgemm.cu tm_qmm_mfma.cuh quant_formats.cuh quant_formats_tables.cuh quant_tables.cuh
 	$(HIPCC) $(HIPFLAGS) $< -o $@
+qgemm_variants.out: qgemm_variants.cu qgemm_variants_kernels.cuh tm_qmm_mfma.cuh quant_formats.cuh quant_formats_tables.cuh quant_tables.cuh
+	$(HIPCC) $(HIPFLAGS) $< -o $@
+
 test: all
 	@for d in $(GOLDEN)/*/; do HIP_VISIBLE_DEVICES=0 ./qgemm.out "$$d"; HIP_VISIBLE_DEVICES=0 ./qflux.out "$$d"; done
+	HIP_VISIBLE_DEVICES=0 ./qgemm_variants.out
 clean:
 	rm -f *.out
 .PHONY: all test clean

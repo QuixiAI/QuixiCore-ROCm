@@ -7,6 +7,8 @@ these compose an RCCL collective with a local GEMM:
 - `gemm_ar`  : K-parallel local GEMM + all_reduce(sum)  -> Y = A@B
 - `ag_gemm`  : all_gather(A row-shards) + full GEMM
 - `gemm_rs`  : K-parallel local GEMM + reduce_scatter over M
+- `ag_gemm_fp8` : all_gather FP8 row-shards as byte payloads + local dequant GEMM
+- `gemm_rs_fp8` : local FP8 shard GEMM + reduce_scatter over M
 
 ## Validated — one process per GPU (production model)
 
@@ -22,6 +24,16 @@ HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 
 This is the correct multi-GPU model — one process per GPU, each owning one device
 — exactly how PyTorch DDP / Megatron tensor-parallel run.
+
+FP8 variants are validated separately with ROCm PyTorch float8 tensors. The
+collective payload for `ag_gemm_fp8` is the raw `uint8` view of the FP8 tensor,
+so the communication volume matches FP8 storage:
+
+```bash
+HIP_VISIBLE_DEVICES=0,1 \
+  ~/QuixiCore/QuixiCore-ROCm/.venv/bin/torchrun --nproc_per_node=2 \
+  --master_port=29534 torch_gemm_collectives_fp8.py
+```
 
 ## Note on the single-process C++ harnesses
 

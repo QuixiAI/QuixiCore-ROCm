@@ -11,7 +11,9 @@ Native CDNA3 port of the tensor-core quantized-matmul path from
 - `tm_qmm_mfma.cuh` — the MFMA primitive + fragment loaders (the validated
   replacement for the CUDA `mma16816`/`load_wfrag`/`load_xfrag`).
 - `qgemm.cu` — weight-only quantized GEMM `Y = X @ dequant(W)^T`, fragment path
-  + full-dequant route for 256-superblock k/i-quants + K-split variant.
+  + full-dequant route for 256-superblock k/i-quants + K-split, wide-N, and
+  prefill-scale CTA-LDS variants.
+- `qgemm_variants.cu` — GPTQ act-order and fp8_raw block-scale variants.
 - `qflux.cu` — fused `gelu_tanh(X @ dequant(W)^T + bias)`.
 
 ## MFMA lane layout (v_mfma_f32_16x16x16_f16, 64 lanes, 4 regs/lane)
@@ -43,12 +45,19 @@ format (all block_k are multiples of 16).
 make test    # qgemm + qflux over all 29 golden formats vs Y_ref / Yflux_ref
 ```
 
-## Result (MI300X, 2026-07-06)
+## Result (MI300X, 2026-07-06/07)
 
-- `qgemm`: 58/58 PASS (29 formats x {base, K-split}) vs `Y_ref`, ~0.017-0.02%
-  rel err. Fragment path ~1.8 TFLOP/s at M=64 N=512 K=4096; K-split ~10-13
-  TFLOP/s (fills the device at this decode shape).
+- `qgemm`: PASS across the golden format matrix for base, K-split, wide-N, and
+  CTA-LDS variants vs `Y_ref`, ~0.017-0.02% rel err. Fragment path ~1.8 TFLOP/s
+  at M=64 N=512 K=4096; K-split ~10-13 TFLOP/s (fills the device at this decode
+  shape). CTA-LDS is a prefill-scale candidate: it loses at decode/small M but
+  reaches ~86-91 TFLOP/s on fp16_raw M>=2048,N=K=4096 by reusing W across four
+  wavefronts; packed q8_0/q4_0 M=1024,N=K=4096 also confirm the win. Broader
+  format routing and qflux mirroring are still deferred.
 - `qflux`: 29/29 PASS vs `Yflux_ref` (fused GELU+bias).
+- `qgemm_variants`: act-order q4_0 PASS vs fp64 gathered reference
+  (8.628e-07 rel); blockscale fp8_raw PASS vs fp64 tiled-scale reference
+  (1.982e-05 rel).
 
 Follow-ups (still on task #8): port the remaining tensor-core consumers that
 reuse this primitive — `lm_head`(+topkp), `moe_quant` (grouped quantized GEMM),

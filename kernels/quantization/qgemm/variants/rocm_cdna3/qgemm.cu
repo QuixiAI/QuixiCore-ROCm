@@ -78,6 +78,80 @@ __global__ void qgemm_wide(float* Y, const __half* X, const uint8_t* Wq, int M, 
     }
 }
 
+template<typename FMT, int MT, int NT>
+__device__ __forceinline__ void stage_qgemm_cta_tile(
+        __half* sX, __half* sW, const __half* X, const uint8_t* Wq,
+        int M, int K, int bpr, int m0, int n0, int k0) {
+    const int tid = threadIdx.x;
+    for (int idx = tid; idx < MT * 16 * 16; idx += blockDim.x) {
+        const int mt = idx / (16 * 16), r = idx - mt * 16 * 16;
+        const int m = r / 16, k = r & 15, gm = m0 + mt * 16 + m;
+        sX[idx] = (gm < M) ? X[size_t(gm) * K + k0 + k] : __float2half(0.0f);
+    }
+    for (int idx = tid; idx < NT * 16 * 16; idx += blockDim.x) {
+        const int nt = idx / (16 * 16), r = idx - nt * 16 * 16;
+        const int n = r / 16, k = k0 + (r & 15);
+        const int kb = k / FMT::block_k, cin = k % FMT::block_k;
+        const uint8_t* base = Wq + (size_t(n0 + nt * 16 + n) * bpr + kb) * FMT::block_bytes;
+        sW[idx] = __float2half(FMT::dequant(base, cin));
+    }
+}
+
+__device__ __forceinline__ half4_t load_xfrag_cta_smem(const __half* sX, int mt) {
+    const int l = threadIdx.x & 63;
+    const int m = l & 15;
+    const int k = (l >> 4) * 4;
+    return *reinterpret_cast<const half4_t*>(sX + mt * 16 * 16 + m * 16 + k);
+}
+
+__device__ __forceinline__ half4_t load_wfrag_cta_smem(const __half* sW, int nt) {
+    const int l = threadIdx.x & 63;
+    const int n = l & 15;
+    const int k = (l >> 4) * 4;
+    return *reinterpret_cast<const half4_t*>(sW + nt * 16 * 16 + n * 16 + k);
+}
+
+// Multi-wave CTA candidate: MT wavefronts own MT 16-row output tiles and share
+// the same NT 16-column W tile through LDS. Useful only at prefill-scale M,
+// where the larger CTA grid still fills the device and W/dequant reuse amortizes
+// the LDS/barrier cost.
+template<typename FMT, int MT, int NT>
+__global__ void qgemm_cta_lds(float* Y, const __half* X, const uint8_t* Wq, int M, int N, int K) {
+    const int n0 = blockIdx.x * (16 * NT);
+    const int m0 = blockIdx.y * (16 * MT);
+    const int wave = threadIdx.x >> 6;
+    const int bpr = K / FMT::block_k;
+    __shared__ __half sX[2][MT * 16 * 16];
+    __shared__ __half sW[2][NT * 16 * 16];
+    float4_t acc[NT];
+    #pragma unroll
+    for (int nt = 0; nt < NT; nt++) acc[nt] = float4_t{0, 0, 0, 0};
+
+    stage_qgemm_cta_tile<FMT, MT, NT>(sX[0], sW[0], X, Wq, M, K, bpr, m0, n0, 0);
+    __syncthreads();
+    for (int k0 = 0; k0 < K; k0 += 16) {
+        const int buf = (k0 / 16) & 1, nxt = buf ^ 1;
+        half4_t a = load_xfrag_cta_smem(sX[buf], wave);
+        half4_t b[NT];
+        #pragma unroll
+        for (int nt = 0; nt < NT; nt++) b[nt] = load_wfrag_cta_smem(sW[buf], nt);
+        if (k0 + 16 < K) {
+            stage_qgemm_cta_tile<FMT, MT, NT>(sX[nxt], sW[nxt], X, Wq, M, K, bpr, m0, n0, k0 + 16);
+        }
+        #pragma unroll
+        for (int nt = 0; nt < NT; nt++) acc[nt] = mma_16x16x16(a, b[nt], acc[nt]);
+        __syncthreads();
+    }
+    const int l = threadIdx.x & 63, ln = l & 15;
+    const int mrow = m0 + wave * 16 + (l >> 4) * 4;
+    #pragma unroll
+    for (int nt = 0; nt < NT; nt++) {
+        const int n = n0 + nt * 16 + ln;
+        #pragma unroll
+        for (int v = 0; v < 4; v++) if (mrow + v < M) Y[size_t(mrow + v) * N + n] = acc[nt][v];
+    }
+}
+
 // Pick NT (N-tiles/wavefront) so the grid still fills the device (~2 waves over
 // 304 CUs); wider tiles amortize the X load but shrink the grid, so cap by
 // occupancy and require 16*NT | N. NT=1 => identical to qgemm (decode fallback).
@@ -146,9 +220,8 @@ static std::vector<uint8_t> read_file(const std::string& p) {
 }
 
 template<typename FMT>
-int run(const std::string& dir, int N, int K) {
+int run(const std::string& dir, int N, int K, int M) {
     constexpr bool SUPERBLOCK = FMT::block_k > 64;   // route k/i-quants via full dequant
-    const int M = 64;
     auto Wq_h = read_file(dir + "/Wq.bin");
     auto X_h  = read_file(dir + "/X2.bin");     // fp16 (M,K)
     auto Y_h  = read_file(dir + "/Y_ref.bin");  // fp32 (M,N) = X @ Wdeq^T
@@ -258,6 +331,47 @@ int run(const std::string& dir, int N, int K) {
                SUPERBLOCK ? "[dequant-route]" : "", 100 * rel, gmax,
                rel < 0.02 ? "PASS" : "FAIL", qgemm_pick_nt(M, N));
         rc |= !(rel < 0.02);
+        if (M > 64) {
+            hipEventRecord(t0);
+            for (int i = 0; i < iters; i++) launchw();
+            hipEventRecord(t1); hipEventSynchronize(t1);
+            hipEventElapsedTime(&ms, t0, t1); ms /= iters;
+            printf("qgemm-wide(NT=4)%s: %.3f ms  %.2f TFLOP/s\n",
+                   SUPERBLOCK ? "[dequant-route]" : "", ms, tflop / (ms / 1e3));
+        }
+
+        dim3 gridc(N / (16 * 4), (M + 16 * 4 - 1) / (16 * 4));
+        auto launchc = [&] {
+            if constexpr (SUPERBLOCK) {
+                dequant_to_fp16<FMT><<<(N * K + 255) / 256, 256>>>(dWf, dWq, N, K);
+                qgemm_cta_lds<fp16_raw, 4, 4><<<gridc, 64 * 4>>>(
+                    dY, dX, reinterpret_cast<const uint8_t*>(dWf), M, N, K);
+            } else {
+                qgemm_cta_lds<FMT, 4, 4><<<gridc, 64 * 4>>>(dY, dX, dWq, M, N, K);
+            }
+        };
+        launchc();
+        hipDeviceSynchronize();
+        if (hipGetLastError() != hipSuccess) { printf("CTA-LDS KERNEL ERROR\n"); return 1; }
+        hipMemcpy(got.data(), dY, sizeof(float) * got.size(), hipMemcpyDeviceToHost);
+        gsum = 0; rsum = 0; gmax = 0;
+        for (size_t i = 0; i < got.size(); i++) {
+            double d = std::abs(double(got[i]) - double(ref[i]));
+            gmax = std::max(gmax, d); gsum += d; rsum += std::abs(double(ref[i]));
+        }
+        rel = gsum / std::max(rsum, 1e-30);
+        printf("qgemm-ctaLDS(4x4)%s: rel %.4f%% max %.4g  (%s)\n",
+               SUPERBLOCK ? "[dequant-route]" : "", 100 * rel, gmax,
+               rel < 0.02 ? "PASS" : "FAIL");
+        rc |= !(rel < 0.02);
+        if (M > 64) {
+            hipEventRecord(t0);
+            for (int i = 0; i < iters; i++) launchc();
+            hipEventRecord(t1); hipEventSynchronize(t1);
+            hipEventElapsedTime(&ms, t0, t1); ms /= iters;
+            printf("qgemm-ctaLDS(4x4)%s: %.3f ms  %.2f TFLOP/s\n",
+                   SUPERBLOCK ? "[dequant-route]" : "", ms, tflop / (ms / 1e3));
+        }
     }
     return rc;
 }
@@ -266,11 +380,13 @@ int main(int argc, char** argv) {
     if (argc < 2) { fprintf(stderr, "usage: %s <golden_dir>\n", argv[0]); return 2; }
     std::string dir = argv[1];
     // Checked-in golden omits meta.txt: infer format from dir basename, dims
-    // default to gen_golden.py (N=512, K=4096). Override: <dir> [N K].
-    char fmt[64]; int N = 512, K = 4096;
+    // default to gen_golden.py (N=512, K=4096, M=64). Override: <dir> [N K M].
+    char fmt[64]; int N = 512, K = 4096, M = 64;
     FILE* f = fopen((dir + "/meta.txt").c_str(), "r");
     if (f) {
-        if (fscanf(f, "%63s %d %d", fmt, &N, &K) != 3) return 2;
+        int got = fscanf(f, "%63s %d %d %d", fmt, &N, &K, &M);
+        if (got != 3 && got != 4) return 2;
+        if (got == 3) M = 64;
         fclose(f);
     } else {
         std::string base = dir;
@@ -278,38 +394,40 @@ int main(int argc, char** argv) {
         auto slash = base.find_last_of('/');
         snprintf(fmt, sizeof(fmt), "%s", (slash == std::string::npos ? base : base.substr(slash + 1)).c_str());
         if (argc >= 4) { N = atoi(argv[2]); K = atoi(argv[3]); }
+        if (argc >= 5) M = atoi(argv[4]);
     }
-    printf("== qgemm %s  N=%d K=%d M=64\n", fmt, N, K);
+    if (argc >= 5) M = atoi(argv[4]);
+    printf("== qgemm %s  N=%d K=%d M=%d\n", fmt, N, K, M);
     std::string s(fmt);
-    if (s == "q8_0")       return run<q8_0>(dir, N, K);
-    if (s == "q4_0")       return run<q4_0>(dir, N, K);
-    if (s == "q4_1")       return run<q4_1>(dir, N, K);
-    if (s == "q5_0")       return run<q5_0>(dir, N, K);
-    if (s == "q5_1")       return run<q5_1>(dir, N, K);
-    if (s == "kU4B8")      return run<kU4B8>(dir, N, K);
-    if (s == "kU4")        return run<kU4>(dir, N, K);
-    if (s == "hqq")        return run<hqq>(dir, N, K);
-    if (s == "fp8_e4m3")   return run<fp8_e4m3>(dir, N, K);
-    if (s == "e5m2")       return run<e5m2>(dir, N, K);
-    if (s == "fp8_block")  return run<fp8_block>(dir, N, K);
-    if (s == "fp4_e2m1")   return run<fp4_e2m1>(dir, N, K);
-    if (s == "mxfp8")      return run<mxfp8>(dir, N, K);
-    if (s == "mxfp4")      return run<mxfp4>(dir, N, K);
-    if (s == "nvfp4")      return run<nvfp4>(dir, N, K);
-    if (s == "mxfp6_e3m2") return run<mxfp6_e3m2>(dir, N, K);
-    if (s == "mxfp6_e2m3") return run<mxfp6_e2m3>(dir, N, K);
-    if (s == "bitnet")     return run<bitnet>(dir, N, K);
-    if (s == "q2_K")       return run<q2_K>(dir, N, K);
-    if (s == "q3_K")       return run<q3_K>(dir, N, K);
-    if (s == "q4_K")       return run<q4_K>(dir, N, K);
-    if (s == "q5_K")       return run<q5_K>(dir, N, K);
-    if (s == "q6_K")       return run<q6_K>(dir, N, K);
-    if (s == "iq4_nl")     return run<iq4_nl>(dir, N, K);
-    if (s == "iq4_xs")     return run<iq4_xs>(dir, N, K);
-    if (s == "iq2_xxs")    return run<iq2_xxs>(dir, N, K);
-    if (s == "iq2_xs")     return run<iq2_xs>(dir, N, K);
-    if (s == "iq3_xxs")    return run<iq3_xxs>(dir, N, K);
-    if (s == "iq1_s")      return run<iq1_s>(dir, N, K);
+    if (s == "q8_0")       return run<q8_0>(dir, N, K, M);
+    if (s == "q4_0")       return run<q4_0>(dir, N, K, M);
+    if (s == "q4_1")       return run<q4_1>(dir, N, K, M);
+    if (s == "q5_0")       return run<q5_0>(dir, N, K, M);
+    if (s == "q5_1")       return run<q5_1>(dir, N, K, M);
+    if (s == "kU4B8")      return run<kU4B8>(dir, N, K, M);
+    if (s == "kU4")        return run<kU4>(dir, N, K, M);
+    if (s == "hqq")        return run<hqq>(dir, N, K, M);
+    if (s == "fp8_e4m3")   return run<fp8_e4m3>(dir, N, K, M);
+    if (s == "e5m2")       return run<e5m2>(dir, N, K, M);
+    if (s == "fp8_block")  return run<fp8_block>(dir, N, K, M);
+    if (s == "fp4_e2m1")   return run<fp4_e2m1>(dir, N, K, M);
+    if (s == "mxfp8")      return run<mxfp8>(dir, N, K, M);
+    if (s == "mxfp4")      return run<mxfp4>(dir, N, K, M);
+    if (s == "nvfp4")      return run<nvfp4>(dir, N, K, M);
+    if (s == "mxfp6_e3m2") return run<mxfp6_e3m2>(dir, N, K, M);
+    if (s == "mxfp6_e2m3") return run<mxfp6_e2m3>(dir, N, K, M);
+    if (s == "bitnet")     return run<bitnet>(dir, N, K, M);
+    if (s == "q2_K")       return run<q2_K>(dir, N, K, M);
+    if (s == "q3_K")       return run<q3_K>(dir, N, K, M);
+    if (s == "q4_K")       return run<q4_K>(dir, N, K, M);
+    if (s == "q5_K")       return run<q5_K>(dir, N, K, M);
+    if (s == "q6_K")       return run<q6_K>(dir, N, K, M);
+    if (s == "iq4_nl")     return run<iq4_nl>(dir, N, K, M);
+    if (s == "iq4_xs")     return run<iq4_xs>(dir, N, K, M);
+    if (s == "iq2_xxs")    return run<iq2_xxs>(dir, N, K, M);
+    if (s == "iq2_xs")     return run<iq2_xs>(dir, N, K, M);
+    if (s == "iq3_xxs")    return run<iq3_xxs>(dir, N, K, M);
+    if (s == "iq1_s")      return run<iq1_s>(dir, N, K, M);
     fprintf(stderr, "unknown format %s\n", fmt);
     return 2;
 }

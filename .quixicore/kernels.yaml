@@ -61,6 +61,7 @@ families:
   collectives:
     status: experimental
     paths:
+      - kernels/collectives
       - distributed-kernels
   utils:
     status: planned
@@ -88,6 +89,20 @@ operations:
       - name: rocm_cdna3
         status: imported
         path: kernels/norms/rmsnorm/variants/rocm_cdna3
+
+  norm_quant:
+    family: norms
+    status: implemented
+    path: kernels/norms/norm_quant
+    notes: >-
+      RMSNorm quant epilogues, AZP int8, and per-token-group int8 ported from
+      CUDA elementwise norm_quant. 8/8 fp64/round-trip checks pass on MI300X;
+      block128/block256 fp16 int8 dynamic RMSNorm timings are within noise on
+      16384x4096.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/norms/norm_quant/variants/rocm_cdna3
 
   softmax:
     family: activations
@@ -248,8 +263,9 @@ operations:
       Tensor-core quantized GEMM. CUDA PTX mma.sync.m16n8k16 rewritten to gfx942
       v_mfma_f32_16x16x16_f16 (tm_qmm_mfma.cuh) on a 64-wide wavefront. qgemm
       (weight-only, fragment + full-dequant + K-split) 58/58 PASS and qflux
-      (fused gelu+bias) 29/29 PASS vs golden on MI300X. lm_head/moe_quant reuse
-      this primitive (pending).
+      (fused gelu+bias) 29/29 PASS vs golden on MI300X. qgemm_actorder and
+      qgemm_blockscale variants now pass standalone fp64-reference checks.
+      lm_head/moe_quant reuse this primitive (pending).
     variants:
       - name: rocm_cdna3
         status: imported
@@ -352,21 +368,47 @@ operations:
         status: implemented
         path: kernels/matmul/fp8fp32/variants/rocm_cdna4/FP8_8wave
 
+  int8_matmul:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/int8
+    notes: >-
+      Dense exact int8 x int8 -> int32 GEMM for A[M,K] @ B[N,K]^T.
+      CDNA3 sdot4 candidate is exact and faster than scalar on the measured
+      256x256x512 harness shape.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/int8/variants/rocm_cdna3
+
   mxfp8_matmul:
     family: matmul
     status: implemented
     path: kernels/matmul/mxfp8
     variants:
       - name: rocm_cdna3
-        status: capability_gated
+        status: implemented
         path: kernels/matmul/mxfp8/variants/rocm_cdna3
-        notes: CDNA4 scaled-MFMA MXFP8 path does not map directly to gfx942.
+        notes: Correctness-first explicit dequant + fp32 GEMM route for gfx942; B200/CDNA4 scaled-MFMA mechanics remain architecture-specific.
       - name: rocm_cdna4_4wave
         status: implemented
         path: kernels/matmul/mxfp8/variants/rocm_cdna4/MXFP8_4wave
       - name: rocm_cdna4_8wave
         status: implemented
         path: kernels/matmul/mxfp8/variants/rocm_cdna4/MXFP8_8wave
+
+  nvfp4_matmul:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/nvfp4
+    notes: >-
+      Correctness-first dense NVFP4 GEMM using the repository tmq::nvfp4
+      layout. Explicit dequant + fp32 GEMM beats fused scalar decode on the
+      measured 64x64x256 harness shape.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/nvfp4/variants/rocm_cdna3
 
   scaled_matmul:
     family: matmul
@@ -379,6 +421,36 @@ operations:
       - name: rocm_cdna4
         status: implemented
         path: kernels/matmul/scaled_matmul/variants/rocm_cdna4
+
+  standalone_collectives:
+    family: collectives
+    status: implemented
+    path: kernels/collectives
+    notes: >-
+      Standalone RCCL all_gather, all_to_all, and reduce_scatter wrappers
+      validated with torchrun one-process-per-GPU on MI300X.
+    variants:
+      - name: all_gather_rocm_cdna3
+        status: implemented
+        path: kernels/collectives/all_gather/variants/rocm_cdna3
+      - name: all_to_all_rocm_cdna3
+        status: implemented
+        path: kernels/collectives/all_to_all/variants/rocm_cdna3
+      - name: reduce_scatter_rocm_cdna3
+        status: implemented
+        path: kernels/collectives/reduce_scatter/variants/rocm_cdna3
+
+  fp8_gemm_collectives:
+    family: collectives
+    status: implemented
+    path: kernels/collectives/gemm_collectives
+    notes: >-
+      FP8 ag_gemm and gemm_rs modes validated with ROCm PyTorch float8 tensors;
+      FP8 all-gather payload moves as raw uint8 views before local dequant GEMM.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/collectives/gemm_collectives/variants/rocm_cdna3
 
 notes:
   - Normal build and test discovery must filter by `variants/rocm_<target>` and skip archive directories.
