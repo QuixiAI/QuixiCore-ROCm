@@ -755,6 +755,33 @@ Run: torchrun --nproc_per_node={4,8} <kernel>.py. These use torch collectives fo
 the comm (RCCL) and torch matmul/softmax for local compute; fusing the local math
 onto the landed MFMA attention/qgemm kernels is a follow-up.
 
+## 2026-07-07: Iris In-Kernel XGMI Overlap (Step 8, optional) — FEASIBILITY
+
+Status: feasibility established; the fused-overlap kernel is a scoped follow-up.
+
+Context: Step 5 showed RCCL collectives contend with the GEMM for CUs on MI300X, so
+the intended Step-8 lever is Iris (ROCm device-initiated XGMI over a symmetric heap):
+issue one-sided puts from a compute kernel's epilogue so comm overlaps compute
+without a separate CU-bound collective.
+
+What was validated (iris_allreduce.py, torchrun one-proc-per-GPU, repo venv):
+- Iris initializes cleanly on this MI300X/ROCm7.2 stack (requires dist.init_process_group
+  first, then iris.iris(heap); symmetric heap allocates on every rank).
+- ctx.ccl.all_reduce over the symmetric heap is CORRECT (2 GPUs: expect 3.0, got 3.0).
+- Standalone A/B vs RCCL (2 GPUs, 2048^2 f32): iris 4.04 ms (4 GB/s) vs rccl 0.398 ms
+  (42 GB/s) = 0.10x.
+
+Reading: Iris's *standalone* library collective is not competitive with RCCL out of
+the box (RCCL is a tuned library; Iris here likely needs config/algorithm + workspace
+tuning, and small messages amortize its Triton launch poorly). But standalone all_reduce
+is NOT the Iris value proposition -- the win is FUSED in-kernel overlap (device-side
+iris.put/store from a GEMM epilogue), which needs a from-scratch Iris/Triton
+producer/consumer GEMM+reduce_scatter kernel. That kernel is the real Step 8 work and is
+deferred as a scoped follow-up; the integration path (init, symmetric heap, correct
+collectives) is now de-risked. iris_allreduce.py kept as the Iris smoke test/comparator.
+
+Raw: 2 GPUs 2048^2 iris 4.04ms/4GB/s vs rccl 0.398ms/42GB/s (0.10x), correctness PASS.
+
 ## Current Baseline Sources
 
 Status: baselines exist, not yet normalized into the shared harness.
