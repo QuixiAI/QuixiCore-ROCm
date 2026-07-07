@@ -1,9 +1,80 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ -d analysis ]; then
-  echo "ROCm benchmark workflows currently live under analysis/."
-  echo "Run the analysis scripts documented in README.md and docs/ for the target GPU/container."
-else
-  echo "No ROCm benchmark harness is present yet."
-fi
+# Run the `bench` target of every ROCm kernel variant that defines one, for the
+# selected arch. Discovery mirrors scripts/build: glob variant Makefiles under
+# kernels/**/variants/rocm_<arch>*/, prune archives. A variant participates only
+# if its Makefile has a `bench:` rule (most perf-tuned kernels ship `make bench`).
+#
+#   scripts/bench [--arch cdna3|cdna4|udna1] [target] [make args...]
+#     target: kernels|all (default) | <path to a kernel dir/subtree>
+
+usage() { sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'; }
+
+arch=""
+target="kernels"
+make_args=()
+had_target=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help|help) usage; exit 0 ;;
+    --arch) [ "$#" -ge 2 ] || { echo "--arch requires a value" >&2; exit 2; }; arch="$2"; shift 2 ;;
+    --arch=*) arch="${1#--arch=}"; shift ;;
+    *) if [ "${had_target}" -eq 0 ]; then target="$1"; had_target=1; else make_args+=("$1"); fi; shift ;;
+  esac
+done
+
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+normalize_arch() {
+  case "$(lower "$1")" in
+    cdna2|rocm_cdna2|gfx90a) echo cdna2 ;;
+    cdna3|rocm_cdna3|gfx940|gfx941|gfx942) echo cdna3 ;;
+    cdna4|rocm_cdna4|gfx950|mi350x|mi355x) echo cdna4 ;;
+    udna1|rocm_udna1|gfx1250) echo udna1 ;;
+    *) echo "$(lower "$1")" ;;
+  esac
+}
+detect_arch() {
+  local gfx=""
+  command -v rocminfo >/dev/null 2>&1 && \
+    gfx="$(rocminfo 2>/dev/null | awk '/Name:[[:space:]]+gfx[[:alnum:]]+/ {print $2; exit}')"
+  [ -n "${gfx}" ] && normalize_arch "${gfx}" || echo cdna3
+}
+gpu_target() {
+  case "$1" in cdna2) echo CDNA2;; cdna3) echo CDNA3;; cdna4) echo CDNA4;; udna1) echo UDNA1;;
+    *) echo "Unsupported arch '$1'. Supported: cdna3, cdna4, udna1" >&2; exit 2;; esac
+}
+variant_prefix() {
+  case "$1" in cdna2) echo rocm_cdna2;; cdna3) echo rocm_cdna3;; cdna4) echo rocm_cdna4;; udna1) echo rocm_udna1;;
+    *) echo "Unsupported arch '$1'" >&2; exit 2;; esac
+}
+
+selected_arch="$([ -n "${arch}" ] && normalize_arch "${arch}" || detect_arch)"
+gpu="$(gpu_target "${selected_arch}")"
+variant="$(variant_prefix "${selected_arch}")"
+
+case "${target}" in
+  kernels|all) root="kernels" ;;
+  *) if [ -d "${target}" ]; then root="${target}"; elif [ -d "kernels/${target}" ]; then root="kernels/${target}"; else
+       echo "Unknown bench target: ${target}" >&2; exit 2; fi ;;
+esac
+
+makefile_has_target() { grep -qE "^$2:" "$1/Makefile" 2>/dev/null || grep -qE "^\.PHONY:.*\b$2\b" "$1/Makefile" 2>/dev/null; }
+
+mapfile -t makefiles < <(find "${root}" -path '*/archive/*' -prune -o \
+  -type f -path "*/variants/${variant}*/Makefile" -print | sort)
+
+ran=0; benched=0
+for mk in "${makefiles[@]}"; do
+  dir="${mk%/Makefile}"
+  ran=$((ran+1))
+  if makefile_has_target "${dir}" bench; then
+    echo "==> ${dir} (make bench)"
+    make -C "${dir}" "GPU_TARGET=${gpu}" bench "${make_args[@]}"
+    benched=$((benched+1))
+  fi
+done
+
+echo "scripts/bench: ${benched}/${ran} ${selected_arch} variants had a bench target."
+[ "${ran}" -gt 0 ] || { echo "No ${selected_arch} kernel variants found under ${root}" >&2; exit 1; }

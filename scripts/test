@@ -155,10 +155,21 @@ find_kernel_tests() {
   local selected_arch="$2"
   local variant
   variant="$(variant_prefix "${selected_arch}")"
+  # Discover both python test scripts AND standalone-harness Makefiles (many
+  # CDNA3 ports ship a self-checking `make test` harness with no test_python.py).
+  # Print one path per test directory; run_test_dir figures out what to run.
   find "${root}" \
     -path '*/archive/*' -prune -o \
     -type f -path "*/variants/${variant}*/*" \
-    \( -name test_python.py -o -name test.py -o -name test_gemm.py \) -print | sort
+    \( -name test_python.py -o -name test.py -o -name test_gemm.py -o -name Makefile \) \
+    -print | sort -u
+}
+
+# True if the Makefile in $1 defines target $2 (grep the .PHONY line or a rule).
+makefile_has_target() {
+  local dir="$1" tgt="$2"
+  [ -f "${dir}/Makefile" ] || return 1
+  grep -qE "^${tgt}:" "${dir}/Makefile" || grep -qE "^\.PHONY:.*\b${tgt}\b" "${dir}/Makefile"
 }
 
 run_test_dir() {
@@ -173,17 +184,22 @@ run_test_dir() {
   [ -f "${dir}/test.py" ] && tests+=("test.py")
   [ -f "${dir}/test_gemm.py" ] && tests+=("test_gemm.py")
 
-  if [ "${#tests[@]}" -eq 0 ]; then
+  if [ "${#tests[@]}" -gt 0 ]; then
+    echo "==> ${dir}"
+    make -C "${dir}" "GPU_TARGET=${gpu}" "PYTHON=${PYTHON}" "${make_args[@]}"
+    for script in "${tests[@]}"; do
+      echo "    ${script}"
+      (cd "${dir}" && "${PYTHON}" "${script}")
+    done
     return 0
   fi
 
-  echo "==> ${dir}"
-  make -C "${dir}" "GPU_TARGET=${gpu}" "PYTHON=${PYTHON}" "${make_args[@]}"
-
-  for script in "${tests[@]}"; do
-    echo "    ${script}"
-    (cd "${dir}" && "${PYTHON}" "${script}")
-  done
+  # No python test scripts: fall back to a standalone-harness `make test`.
+  if makefile_has_target "${dir}" test; then
+    echo "==> ${dir} (make test)"
+    make -C "${dir}" "GPU_TARGET=${gpu}" "PYTHON=${PYTHON}" test "${make_args[@]}"
+  fi
+  return 0
 }
 
 run_kernel_tree() {
