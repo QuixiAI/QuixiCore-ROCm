@@ -725,6 +725,36 @@ Note: 7b (hipblaslt-bench / rocblas-bench CLIs, CK examples, AITER fused compara
 deferred - torch already exposes the hipBLASLt/flash numbers above; AITER is installed
 for a fused-MoE/attention comparison when that work is picked up.
 
+## 2026-07-07: New Distributed Kernels (Step 6) — LANDED (ring / ulysses / moe_dispatch)
+
+Status: landed. Three new sequence/expert-parallel distributed kernels on the
+proven torchrun one-process-per-GPU + RCCL pattern (repo venv torch 2.12.1+rocm7.2),
+each validated allclose vs a single-GPU reference on 4 AND 8 GPUs. New capability
+(not a perf tune).
+
+- ring_attn (kernels/collectives/ring_attn/variants/rocm_cdna3/ring_attn.py):
+  sequence-parallel attention. N sharded across ranks; deadlock-free ring rotation
+  of the KV shard (batch_isend_irecv) with online-softmax merge per block. After W
+  steps each rank has full-context attention for its Q rows.
+- ulysses_attn (.../ulysses_attn/...): DeepSpeed-Ulysses. all_to_all reshards
+  [Ms,H,D] seq-parallel -> [N,Hs,D] head-parallel, local full attention on the head
+  subset, second all_to_all back to seq-parallel. Requires H % W == 0.
+- moe_dispatch_gemm (.../moe_dispatch_gemm/...): expert-parallel MoE. Per-token
+  expert ids -> all_to_all_v dispatch to expert-owning ranks (variable counts
+  exchanged first, used as all_to_all_single split sizes) -> grouped per-expert GEMM
+  -> all_to_all_v back -> unsort. Requires E % W == 0.
+
+Correctness (max abs err vs single-GPU ref):
+| kernel | 4 GPUs | 8 GPUs |
+|---|---|---|
+| ring_attn        | 2.38e-07 | 2.76e-07 |
+| ulysses_attn     | 2.31e-07 | 2.12e-07 |
+| moe_dispatch_gemm| 3.10e-06 | 2.62e-06 |
+
+Run: torchrun --nproc_per_node={4,8} <kernel>.py. These use torch collectives for
+the comm (RCCL) and torch matmul/softmax for local compute; fusing the local math
+onto the landed MFMA attention/qgemm kernels is a follow-up.
+
 ## Current Baseline Sources
 
 Status: baselines exist, not yet normalized into the shared harness.
