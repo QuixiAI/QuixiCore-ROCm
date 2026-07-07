@@ -47,6 +47,38 @@ __global__ void qflux_gelu(float* Y, const __half* X, const uint8_t* Wq, const f
         if (mrow + v < M) Y[size_t(mrow + v) * N + n] = gelu_tanh(acc[v] + bN);
 }
 
+// wide N-tile variant (perf pass for M>=~256): NT 16-wide N-tiles per wavefront;
+// the X fragment is loaded once per k-step and reused across NT W-fragments
+// (X traffic /NT, MFMA:load ratio *NT). Same GEMM core as qgemm_wide (measured
+// +47-54% at M>=256; the gelu+bias epilogue is one op/element, negligible).
+// Occupancy-picked NT (see qgemm's qgemm_pick_nt); NT=1 == qflux_gelu (decode).
+template<typename FMT, int NT>
+__global__ void qflux_gelu_wide(float* Y, const __half* X, const uint8_t* Wq, const float* bias,
+                                int M, int N, int K) {
+    const int n0 = blockIdx.x * (16 * NT);
+    const int m0 = blockIdx.y * 16;
+    const int bpr = K / FMT::block_k;
+    float4_t acc[NT];
+    #pragma unroll
+    for (int nt = 0; nt < NT; nt++) acc[nt] = float4_t{0, 0, 0, 0};
+    for (int k0 = 0; k0 < K; k0 += 16) {
+        half4_t a = load_xfrag(X, K, m0, k0);
+        #pragma unroll
+        for (int nt = 0; nt < NT; nt++) {
+            half4_t b = load_wfrag<FMT>(Wq, bpr, n0 + nt * 16, k0);
+            acc[nt] = mma_16x16x16(a, b, acc[nt]);
+        }
+    }
+    const int l = threadIdx.x & 63, ln = l & 15, mrow = m0 + (l >> 4) * 4;
+    #pragma unroll
+    for (int nt = 0; nt < NT; nt++) {
+        const int n = n0 + nt * 16 + ln; const float bN = bias[n];
+        #pragma unroll
+        for (int v = 0; v < 4; v++)
+            if (mrow + v < M) Y[size_t(mrow + v) * N + n] = gelu_tanh(acc[nt][v] + bN);
+    }
+}
+
 template<typename FMT>
 __global__ void dequant_to_fp16_k(half* out, const uint8_t* Wq, int N, int K) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -106,7 +138,32 @@ int run(const std::string& dir, int N, int K) {
     double rel = gsum / std::max(rsum, 1e-30);
     printf("qflux%s: rel %.4f%% max %.4g  (%s)\n",
            SUPERBLOCK ? "[dequant-route]" : "", 100 * rel, gmax, rel < 0.03 ? "PASS" : "FAIL");
-    return rel < 0.03 ? 0 : 1;
+    int rc = rel < 0.03 ? 0 : 1;
+
+    // wide N-tile variant: golden-validate at NT=4 (golden dir is decode M=64, where
+    // qgemm_pick_nt would pick NT=1; forced NT=4 here purely to check correctness).
+    if (N % (16 * 4) == 0) {
+        dim3 gridw(N / (16 * 4), (M + 15) / 16);
+        if constexpr (SUPERBLOCK) {
+            dequant_to_fp16_k<FMT><<<(N * K + 255) / 256, 256>>>(dWf, dWq, N, K);
+            qflux_gelu_wide<fp16_raw, 4><<<gridw, 64>>>(dY, dX, reinterpret_cast<const uint8_t*>(dWf), dB, M, N, K);
+        } else {
+            qflux_gelu_wide<FMT, 4><<<gridw, 64>>>(dY, dX, dWq, dB, M, N, K);
+        }
+        hipDeviceSynchronize();
+        if (hipGetLastError() != hipSuccess) { printf("WIDE KERNEL ERROR\n"); return 1; }
+        hipMemcpy(got.data(), dY, sizeof(float) * got.size(), hipMemcpyDeviceToHost);
+        gsum = 0; rsum = 0; gmax = 0;
+        for (size_t i = 0; i < got.size(); i++) {
+            double d = std::abs(double(got[i]) - double(ref[i]));
+            gmax = std::max(gmax, d); gsum += d; rsum += std::abs(double(ref[i]));
+        }
+        rel = gsum / std::max(rsum, 1e-30);
+        printf("qflux-wide(NT=4)%s: rel %.4f%% max %.4g  (%s)\n",
+               SUPERBLOCK ? "[dequant-route]" : "", 100 * rel, gmax, rel < 0.03 ? "PASS" : "FAIL");
+        rc |= !(rel < 0.03);
+    }
+    return rc;
 }
 
 int main(int argc, char** argv) {

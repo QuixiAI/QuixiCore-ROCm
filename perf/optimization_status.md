@@ -656,7 +656,7 @@ Perf A/B (MI300X, N=K=4096, HIP-event median, TFLOP/s=2MNK):
 
 Decode regresses (grid shrinks below CU count) -> pick_nt keeps NT=1 there (the
 existing qgemm_ksplit K-slice path handles decode occupancy). Net: +47-54% at
-M>=256, no regression at decode. Follow-ups: apply the same wide-tile to qflux;
+M>=256, no regression at decode. Applied to qflux too (qflux_gelu_wide<FMT,NT>, golden-validated all formats bit-matching base, same core so same +47-54%; commit follows). Remaining follow-ups:
 combine wide-N with LDS-staged X double-buffer for the next tier; wire pick_nt
 into the production serving dispatch.
 
