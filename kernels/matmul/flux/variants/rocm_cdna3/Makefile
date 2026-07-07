@@ -9,3 +9,9 @@ test: all
 clean:
 	rm -f *.out
 .PHONY: all test clean
+
+bench:
+	$(HIPCC) $(HIPFLAGS) flux_bench.cu -o flux_bench.out
+	HIP_VISIBLE_DEVICES=0 ./flux_bench.out 2048 2048 2048
+	HIP_VISIBLE_DEVICES=0 ./flux_bench.out 4096 4096 4096
+.PHONY: bench

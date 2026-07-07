@@ -600,6 +600,36 @@ MFMA-tile the attention backward.
 
 Raw: perf/results/2026-07-07/attention-mfma/.
 
+## 2026-07-07: flux GEMM LDS-B Experiment — REJECTED
+
+Status: rejected (inconsistent across shapes; the real bottleneck is elsewhere).
+
+Experiment: the flux dense-bf16 GEMM loads B column-strided (4 scalar loads/lane/
+k-step, uncoalesced). Tried staging a [16x16] B tile into LDS via a coalesced
+global load, read back in the MFMA fragment layout (flux_bench.cu, flux_base vs
+flux_lds). Bit-identical output.
+
+Perf A/B (MI300X, HIP-event median, TFLOP/s = 2*M*N*K):
+| shape | base (strided B) | LDS-B | speedup |
+|---|---|---|---|
+| 2048^3 | 39.2 TFLOP/s | 45.4 | 1.16x |
+| 4096^3 | 34.4 TFLOP/s | 32.3 | 0.94x |
+
+Decision: REJECT. Wins +16% at 2048^3 but regresses -6% at 4096^3 (the per-k-step
+__syncthreads barriers do not amortize at large K). Both kernels are ~35-45
+TFLOP/s vs ~1300 bf16 peak because the structural limiter is the 16x16-output-tile-
+per-wavefront geometry (one MFMA per iter, no A-reuse, no wide accumulator) - a
+B-load tweak cannot fix that. The real win needs the full wide-tile, double-
+buffered LDS-staged GEMM (model: HipKittens 256_256_64_32_with16x32.cpp): wider
+output tiles (e.g. 128x128 with register C-accum), LDS-staged A+B with tic/toc
+double buffering, and s_waitcnt/s_barrier scheduling. That is a large rewrite of
+marginal value for DENSE flux (hipBLASLt/rocBLAS are the practical path for dense
+bf16); the custom-kernel effort is better spent on the QUANTIZED qgemm (no library
+alternative) - deferred as a scoped follow-up. flux_bench.cu is kept as the A/B
+harness (`make bench`).
+
+Raw: kernels/matmul/flux/variants/rocm_cdna3/flux_bench.cu.
+
 ## Current Baseline Sources
 
 Status: baselines exist, not yet normalized into the shared harness.
