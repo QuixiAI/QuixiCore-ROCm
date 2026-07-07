@@ -630,6 +630,38 @@ harness (`make bench`).
 
 Raw: kernels/matmul/flux/variants/rocm_cdna3/flux_bench.cu.
 
+## 2026-07-07: qgemm Wide N-Tile (X-reuse) — LANDED (+47-54% at M>=256)
+
+Status: landed. Weight-only quant GEMM Y=X@dequant(W)^T gets a wide N-tile kernel
+`qgemm_wide<FMT,NT>` (qgemm.cu): NT 16-wide N-tiles per 64-lane wavefront, the X
+fragment loaded once per k-step and reused across NT W-fragments (X traffic /NT,
+MFMA:load ratio *NT). Bitwise-identical to the shipped qgemm (same load_xfrag/
+load_wfrag/mma_16x16x16 math), so the win is orthogonal to the quant format.
+
+NT is occupancy-picked (`qgemm_pick_nt`): widening amortizes the X load but shrinks
+the grid, so cap NT so the grid still fills ~2 waves over 304 CUs and require
+16*NT | N. NT=1 (== base) for decode (small M); NT=4 for prefill/large M. This
+avoids the decode regression (see A/B).
+
+Correctness: `make test` golden (all quant formats incl. k/i-quant dequant-route)
+PASS with qgemm-wide(NT=4) rel bit-matching base (e.g. max abs 9.06e-06 == base).
+Bench (qgemm_bench.cu, fp16_raw to isolate tiling) wide vs base max abs diff 0.
+
+Perf A/B (MI300X, N=K=4096, HIP-event median, TFLOP/s=2MNK):
+| M | base (NT=1) | wide (NT=4) | speedup | pick_nt |
+|---|---|---|---|---|
+| 64 (decode)  | 31.1 TFLOP/s | 18.9 | 0.61x | -> **1** (base) |
+| 256          | 33.7 TFLOP/s | 49.6 | 1.47x | 4 |
+| 2048 (prefill)| 36.2 TFLOP/s | 55.9 | 1.54x | 4 |
+
+Decode regresses (grid shrinks below CU count) -> pick_nt keeps NT=1 there (the
+existing qgemm_ksplit K-slice path handles decode occupancy). Net: +47-54% at
+M>=256, no regression at decode. Follow-ups: apply the same wide-tile to qflux;
+combine wide-N with LDS-staged X double-buffer for the next tier; wire pick_nt
+into the production serving dispatch.
+
+Raw: perf/results/2026-07-07/qgemm-wide/bench.txt.
+
 ## Current Baseline Sources
 
 Status: baselines exist, not yet normalized into the shared harness.

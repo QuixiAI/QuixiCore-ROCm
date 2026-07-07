@@ -50,6 +50,43 @@ __global__ void qgemm(float* Y, const __half* X, const uint8_t* Wq, int M, int N
         if (mrow + v < M) Y[size_t(mrow + v) * N + n] = acc[v];
 }
 
+// wide N-tile variant (perf pass for M>=~256): NT 16-wide N-tiles per wavefront;
+// the X fragment is loaded once per k-step and reused across NT W-fragments, so
+// X traffic drops NT-fold and the MFMA:load ratio rises NT-fold. Bitwise-identical
+// to qgemm (same fragment math). Occupancy-limited at tiny M (see qgemm_pick_nt).
+template<typename FMT, int NT>
+__global__ void qgemm_wide(float* Y, const __half* X, const uint8_t* Wq, int M, int N, int K) {
+    const int n0 = blockIdx.x * (16 * NT);
+    const int m0 = blockIdx.y * 16;
+    const int bpr = K / FMT::block_k;
+    float4_t acc[NT];
+    #pragma unroll
+    for (int nt = 0; nt < NT; nt++) acc[nt] = float4_t{0, 0, 0, 0};
+    for (int k0 = 0; k0 < K; k0 += 16) {
+        half4_t a = load_xfrag(X, K, m0, k0);
+        #pragma unroll
+        for (int nt = 0; nt < NT; nt++) {
+            half4_t b = load_wfrag<FMT>(Wq, bpr, n0 + nt * 16, k0);
+            acc[nt] = mma_16x16x16(a, b, acc[nt]);
+        }
+    }
+    const int l = threadIdx.x & 63, ln = l & 15, mrow = m0 + (l >> 4) * 4;
+    #pragma unroll
+    for (int nt = 0; nt < NT; nt++) { const int n = n0 + nt * 16 + ln;
+        #pragma unroll
+        for (int v = 0; v < 4; v++) if (mrow + v < M) Y[size_t(mrow + v) * N + n] = acc[nt][v];
+    }
+}
+
+// Pick NT (N-tiles/wavefront) so the grid still fills the device (~2 waves over
+// 304 CUs); wider tiles amortize the X load but shrink the grid, so cap by
+// occupancy and require 16*NT | N. NT=1 => identical to qgemm (decode fallback).
+static inline int qgemm_pick_nt(int M, int N) {
+    const long tilesM = (M + 15) / 16;
+    for (int nt : {4, 2}) if (N % (16 * nt) == 0 && (long)(N / (16 * nt)) * tilesM >= 608) return nt;
+    return 1;
+}
+
 // full-dequant kernel (route for 256-superblock formats)
 template<typename FMT>
 __global__ void dequant_to_fp16(half* out, const uint8_t* Wq, int N, int K) {
@@ -190,6 +227,36 @@ int run(const std::string& dir, int N, int K) {
         printf("qgemm-ksplit(x%d)%s: rel %.4f%% max %.4g | %.3f ms  %.2f TFLOP/s  (%s)\n",
                splits, SUPERBLOCK ? "[dequant-route]" : "", 100 * rel, gmax, ms,
                tflop / (ms / 1e3), rel < 0.02 ? "PASS" : "FAIL");
+        rc |= !(rel < 0.02);
+    }
+
+    // ---- wide N-tile variant: golden-validate at NT=4 (the golden dir is the
+    // decode M=64 shape, occupancy-unfavorable for wide, so qgemm_pick_nt(M,N)
+    // would pick NT=%d in production; forced NT=4 here purely to check correctness
+    // vs golden — the prefill/large-M A/B is in qgemm_bench.cu). ----
+    if (N % (16 * 4) == 0) {
+        dim3 gridw(N / (16 * 4), (M + 15) / 16);
+        auto launchw = [&] {
+            if constexpr (SUPERBLOCK) {
+                dequant_to_fp16<FMT><<<(N * K + 255) / 256, 256>>>(dWf, dWq, N, K);
+                qgemm_wide<fp16_raw, 4><<<gridw, 64>>>(dY, dX, reinterpret_cast<const uint8_t*>(dWf), M, N, K);
+            } else {
+                qgemm_wide<FMT, 4><<<gridw, 64>>>(dY, dX, dWq, M, N, K);
+            }
+        };
+        launchw();
+        hipDeviceSynchronize();
+        if (hipGetLastError() != hipSuccess) { printf("WIDE KERNEL ERROR\n"); return 1; }
+        hipMemcpy(got.data(), dY, sizeof(float) * got.size(), hipMemcpyDeviceToHost);
+        gsum = 0; rsum = 0; gmax = 0;
+        for (size_t i = 0; i < got.size(); i++) {
+            double d = std::abs(double(got[i]) - double(ref[i]));
+            gmax = std::max(gmax, d); gsum += d; rsum += std::abs(double(ref[i]));
+        }
+        rel = gsum / std::max(rsum, 1e-30);
+        printf("qgemm-wide(NT=4)%s: rel %.4f%% max %.4g  (%s)  [pick_nt=%d]\n",
+               SUPERBLOCK ? "[dequant-route]" : "", 100 * rel, gmax,
+               rel < 0.02 ? "PASS" : "FAIL", qgemm_pick_nt(M, N));
         rc |= !(rel < 0.02);
     }
     return rc;

@@ -242,7 +242,7 @@ operations:
 
   qgemm:
     family: quantization
-    status: imported
+    status: optimized
     path: kernels/quantization/qgemm
     notes: >-
       Tensor-core quantized GEMM. CUDA PTX mma.sync.m16n8k16 rewritten to gfx942

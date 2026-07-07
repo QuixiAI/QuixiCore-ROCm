@@ -16,3 +16,11 @@ test: all
 clean:
 	rm -f *.out
 .PHONY: all test clean
+
+qgemm_bench.out: qgemm_bench.cu tm_qmm_mfma.cuh quant_formats.cuh quant_formats_tables.cuh quant_tables.cuh
+	$(HIPCC) -std=c++17 -O3 --offload-arch=gfx942 -Wno-unused-value $< -o $@
+bench: qgemm_bench.out
+	HIP_VISIBLE_DEVICES=0 ./qgemm_bench.out 64 4096 4096
+	HIP_VISIBLE_DEVICES=0 ./qgemm_bench.out 256 4096 4096
+	HIP_VISIBLE_DEVICES=0 ./qgemm_bench.out 2048 4096 4096
+.PHONY: bench
