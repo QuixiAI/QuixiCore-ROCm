@@ -511,6 +511,26 @@ GEMM, flux, based, hedgehog, linear attention, fftconv, mamba2 both forms) now
 has correctness-valid CDNA3 kernels. Decision: KEEP. Perf: MFMA-tiled variants.
 Raw: perf/results/2026-07-06/{hedgehog,linattn_decay,fftconv,mamba2}/.
 
+## 2026-07-07: Fused Collective+GEMM (semantics implemented; multi-GPU run blocked)
+
+Status: code implemented (correct by composition); live multi-GPU validation
+blocked by a wedged RCCL state I caused this session.
+
+`kernels/collectives/gemm_collectives/variants/rocm_cdna3` implements gemm_ar
+(K-parallel GEMM + allreduce), ag_gemm (allgather + GEMM), gemm_rs (GEMM +
+reduce_scatter) as RCCL collective o local GEMM - the correct CDNA3 replacement
+for the CUDA parallel/* multimem (NVLS) fused kernels. Correctness follows from
+two verified pieces: the plain RCCL collectives (all_reduce + reduce_scatter
+verified across 8 MI300X earlier this session, committed) and a local GEMM.
+
+HONEST BLOCKER: repeated RCCL test launches that hit the 2-min tool timeout left
+the multi-GPU RCCL state stuck (the previously-passing plain-collectives test now
+hangs too). /dev/shm cleanup + pkill did not clear it; it needs a fresh process
+environment / GPU reset. I stopped running GPU commands to avoid worsening the
+shared machine. The fused code is unchanged from the verified composition; the
+real follow-up is compute/comm OVERLAP via streamed tiles or the Iris/XGMI
+framework (task #12).
+
 ## Current Baseline Sources
 
 Status: baselines exist, not yet normalized into the shared harness.
