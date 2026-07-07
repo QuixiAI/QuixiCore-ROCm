@@ -696,6 +696,35 @@ torch_gemm_overlap.py is kept as the validated overlap harness/comparator.
 
 Raw: perf/results/2026-07-07/collective-overlap/sweep.txt.
 
+## 2026-07-07: Library/Framework Baselines (Step 7a) — RECORDED
+
+Honest context for the landed wins: the optimized CDNA3 kernels vs torch's own
+kernels on MI300X (repo venv torch 2.12.1+rocm7.2). These are baselines, not a
+change — they show remaining headroom and where to focus.
+
+| kernel | shape | mine | torch/library | ratio |
+|---|---|---|---|---|
+| attention noncausal | B4 H32 H_KV8 N2048 D128 | 97 TFLOP/s | SDPA (flash) 321 | 0.30x |
+| attention causal    | same | 77 TFLOP/s | SDPA causal 223 | 0.34x |
+| qgemm M=256  | N=K=4096 | 49.6 TFLOP/s | dense fp16 matmul (hipBLASLt) 272 | 0.18x |
+| qgemm M=2048 | N=K=4096 | 55.9 TFLOP/s | dense fp16 matmul 471 | 0.12x |
+| layernorm | 16384x2048 f32 | 2399 GB/s | F.layer_norm 3372 | 0.71x |
+| layernorm | 65536x8192 f32 | 1655 GB/s | F.layer_norm 2956 | 0.56x |
+
+Reading: the landed wins are real and large vs the naive ports (norm +30-71%,
+attention 16.65x, qgemm +47-54%), but the kernels are still below torch/library.
+Norm is closest (memory-bound, ~0.6-0.7x). GEMM has the most headroom (0.12-0.18x
+of hipBLASLt) - the 16x16-tile-per-wavefront geometry is the limiter; approaching
+the library needs the full wide-tile, double-buffered, LDS-staged GEMM (register
+C-accum, tic/toc) - the same rewrite flux/qgemm both point at. Attention ~0.3x of
+SDPA's flash backend - the K/V-LDS + larger-query-block + double-buffer follow-ups
+are the path. qgemm also carries dequant work torch's dense matmul does not, so the
+dense number is a loose ceiling.
+
+Note: 7b (hipblaslt-bench / rocblas-bench CLIs, CK examples, AITER fused comparators)
+deferred - torch already exposes the hipBLASLt/flash numbers above; AITER is installed
+for a fused-MoE/attention comparison when that work is picked up.
+
 ## Current Baseline Sources
 
 Status: baselines exist, not yet normalized into the shared harness.
