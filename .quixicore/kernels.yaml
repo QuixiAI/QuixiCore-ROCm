@@ -64,7 +64,7 @@ families:
       - kernels/collectives
       - distributed-kernels
   utils:
-    status: planned
+    status: partial
     paths:
       - kernels/utils
 
@@ -103,6 +103,20 @@ operations:
       - name: rocm_cdna3
         status: implemented
         path: kernels/norms/norm_quant/variants/rocm_cdna3
+
+  qk_norm_rope:
+    family: norms
+    status: implemented
+    path: kernels/norms/qk_norm_rope
+    notes: >-
+      Packed-QKV Q/K RMSNorm + RoPE ported from QuixiCore-Metal for CDNA3.
+      Supports D in {64,128,256}, split-half and interleaved RoPE, Gemma
+      weight mode, and V copy-through. Standalone HIP harness passes host
+      oracle checks on MI300X.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/norms/qk_norm_rope/variants/rocm_cdna3
 
   softmax:
     family: activations
@@ -146,6 +160,34 @@ operations:
       - name: rocm_cdna3
         status: imported
         path: kernels/quantization/qgemv/variants/rocm_cdna3
+
+  quant_rt:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_rt
+    notes: >-
+      Runtime quantization group variants ported from QuixiCore-Metal:
+      per-group FP8 e4m3 with optional UE8M0-style power-of-two scale,
+      per-group symmetric int8, and per-token asymmetric int8 AZP.
+      Complements the per-token/per-tensor quant_rt harness under qgemv.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_rt/variants/rocm_cdna3
+
+  qgemm_int:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/qgemm_int
+    notes: >-
+      Scaled integer prefill GEMM ported from QuixiCore-Metal: W8A8,
+      W8A8 with activation zero-point correction, and BitNet W2A8.
+      CDNA3 W8A8 paths use gfx942 sdot4; W2A8 uses the existing BitNet
+      block format from the quantization format layer.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/qgemm_int/variants/rocm_cdna3
 
   moe:
     family: moe
@@ -254,6 +296,32 @@ operations:
       - name: rocm_cdna3
         status: imported
         path: kernels/matmul/flux/variants/rocm_cdna3
+
+  matmul_custom:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/matmul_custom
+    notes: >-
+      Metal contract surface for f32/bf16 C=A(N,K)@B(K,M), implemented as a
+      correctness-first direct HIP GEMM for CDNA3. This is coverage, not the
+      tuned dense GEMM route.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/matmul_custom/variants/rocm_cdna3
+
+  gemm_staged:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/gemm_staged
+    notes: >-
+      Metal staged-GEMM contract surface for f32/bf16 C=A(N,K)@B(K,M), ported
+      as a CDNA3 LDS-tiled HIP kernel. Correctness-first coverage; tuned MFMA
+      dense GEMM remains under bf16fp32/flux/qgemm families.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/gemm_staged/variants/rocm_cdna3
 
   qgemm:
     family: quantization
@@ -451,6 +519,19 @@ operations:
       - name: rocm_cdna3
         status: implemented
         path: kernels/collectives/gemm_collectives/variants/rocm_cdna3
+
+  marginal:
+    family: utils
+    status: implemented
+    path: kernels/utils/marginal
+    notes: >-
+      Metal marginal layout/bit utility group ported for CDNA3: tau_tail,
+      packbits, segment_packbits, and 16-bit column permutation. Standalone
+      HIP harness passes host oracle checks.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/marginal/variants/rocm_cdna3
 
   qgemm_q4q8:
     family: quantization
