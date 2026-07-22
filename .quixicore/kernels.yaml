@@ -452,6 +452,55 @@ operations:
         status: implemented
         path: kernels/collectives/gemm_collectives/variants/rocm_cdna3
 
+  qgemm_q4q8:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/qgemm_q4q8
+    notes: >-
+      Q4_0-weight x Q8_0-activation integer prefill GEMM ported from
+      embeddinggemma.c (q4_q8_projection). 4-bit packed weights (-8 zero point,
+      per-block fp16 scale) dotted against int8 activations (per-block fp16
+      scale + int16 code sum) via gfx942 v_dot4 (sdot4), with the -8 zero point
+      corrected per block by -8*q8.sum. Distinct from qgemm (Q4_0->fp16 MFMA)
+      and qgemm_int (W8A8/W2A8). rel ~6e-8 vs fp64; 1.49-1.57x over
+      float-dequant at prefill on MI300X.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/qgemm_q4q8/variants/rocm_cdna3
+
+  qgeglu:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/qgeglu
+    notes: >-
+      Fused quantized gated GeGLU ported from embeddinggemma.c
+      (q4_mfma_up_gate_gelu_f16): dual Q4_0 weight-only MFMA projections (up,
+      gate) of one fp16 activation on v_mfma_f32_16x16x16_f16, then
+      gelu_tanh(gate)*up in registers before a single fp16 store. Fuses what
+      qflux (single proj+gelu+bias) and flux_gate (dense*precomputed gate) do
+      not. rel ~3.3e-4 vs fp64; 1.19-1.23x over unfused two-proj+gelu on MI300X.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/qgeglu/variants/rocm_cdna3
+
+  gqa_swa:
+    family: attention
+    status: implemented
+    path: kernels/attention/gqa_swa
+    notes: >-
+      Symmetric (bidirectional, centered) sliding-window GQA flash attention
+      ported from embeddinggemma.c (mfma_attention_f16). Query q attends keys
+      [q-w/2, q+w/2] with no causal mask; w=0 recovers full attention. Same
+      BQ=BK=16 online-softmax MFMA flash as gqa, GQA with H_KV=1. Adds the
+      centered band that gqa/gqa_causal (backward-only) could not express. rel
+      ~1.4e-4..1.9e-4 vs fp64; T=2048 window=256 is 6.8x over full on MI300X.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/attention/gqa_swa/variants/rocm_cdna3
+
 notes:
   - Normal build and test discovery must filter by `variants/rocm_<target>` and skip archive directories.
   - Upstream architecture branches are import sources only; supported target variants live side by side in main.

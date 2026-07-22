@@ -1012,3 +1012,64 @@ Status: baselines exist, not yet normalized into the shared harness.
   or convert directly to the shared `perf/results/YYYY-MM-DD/<kernel>/` layout?
 - Which library baseline should be primary for each matrix family: hipBLASLt,
   rocBLAS, Composable Kernel, AITER, Triton, or a per-shape best-of table?
+
+## 2026-07-22: embeddinggemma.c ROCm Kernel Ports To CDNA3
+
+Status: landed. Three shape/format-named variants ported from
+`~/embeddinggemma-bench/src/engine_rocm.hip`, each with correctness vs an fp64
+host reference and a focused baseline-vs-candidate A/B on this MI300X (gfx942,
+ROCm/HIP 7.2). Existing coverage recorded, not duplicated.
+
+Current implementation / public route: standalone CDNA3 variants under
+`kernels/quantization/qgemm_q4q8/variants/rocm_cdna3`,
+`kernels/quantization/qgeglu/variants/rocm_cdna3`, and
+`kernels/attention/gqa_swa/variants/rocm_cdna3`; each builds and runs via its
+local `make test` / `make bench`.
+
+References inspected: embeddinggemma.c `src/engine_rocm.hip` (q4_q8_dot /
+q4_q8_projection, q4_mfma_up_gate_gelu_f16, mfma_attention_f16 /
+flash_attention_f16), existing ROCm `qgemm` (Q4_0->fp16 MFMA + qflux),
+`qgemm_int` (W8A8/W2A8), `gqa`/`gqa_causal` (MFMA flash forward), `flux`
+(flux_gelu/flux_gate), `.quixicore/kernels.yaml`, and `perf/perf.md`.
+
+Already existed in QuixiCore-ROCm (recorded, NOT duplicated):
+
+- The Q4_0->fp16 MFMA projection GEMM (embeddinggemma q4_mfma_projection*) is the
+  existing `qgemm` MFMA path (dequant-to-fp16 + v_mfma_f32_16x16x16_f16). Equal
+  algorithm; not re-added.
+- Single-projection fused GELU (embeddinggemma q4_mfma projection + gelu) is the
+  existing `qflux` (gelu_tanh(X@dequant(W)^T + bias)). Not re-added.
+- The base MFMA flash-attention forward (non-causal / causal) is the existing
+  `gqa` / `gqa_causal`. Only the symmetric-window specialization was missing.
+
+Correctness (`make test`, MI300X, fp64 host ref):
+
+- qgemm_q4q8: rel ~6e-8, PASS (ragged 48x768x17, FFN 1152x768x64, decode
+  768x768x1). Device integer math exact; only fp16 scale rounding differs.
+- qgeglu: rel ~3.3e-4, PASS (1152x768, M in {16,64}). fp16 MFMA accumulation.
+- gqa_swa: rel ~1.4e-4..1.9e-4, PASS (full + windows 16/128/256/512; ragged
+  T=37, aligned T=512).
+
+Focused A/B (HIP-event median, warmup 10 / iters 50; `make bench`):
+
+| Kernel | Shape | Baseline | Candidate | Decision |
+|---|---|---:|---:|---|
+| qgemm_q4q8 | N1152 K768 M64 | float-dequant 5.69 TOPS | sdot4 8.46 TOPS (1.49x) | KEEP |
+| qgemm_q4q8 | N768 K1152 M64 | float-dequant 5.39 TOPS | sdot4 8.46 TOPS (1.57x) | KEEP |
+| qgemm_q4q8 | N768 K768 M1 (decode) | 0.0059 ms | 0.0058 ms (1.02x) | KEEP (mem-bound parity) |
+| qgeglu | N1152 K768 M64 | unfused 6.25 TFLOP/s | fused 7.45 TFLOP/s (1.19x) | KEEP |
+| qgeglu | N1152 K768 M256 | unfused 17.57 TFLOP/s | fused 21.68 TFLOP/s (1.23x) | KEEP |
+| gqa_swa | T2048 w256 | full 1.3639 ms | banded 0.1995 ms (6.84x) | KEEP |
+| gqa_swa | T2048 w512 | full 1.3639 ms | banded 0.3764 ms (3.62x) | KEEP |
+
+Decision: KEEP all three. Each is a genuinely missing route (integer Q4_0xQ8_0
+dot; dual-projection quantized GeGLU fusion; symmetric sliding-window band) that
+wins over its in-tree baseline at correctness. Commits: qgemm_q4q8 1752702a,
+qgeglu 8c6237ae, gqa_swa 90eea2c9.
+
+Follow-ups: MFMA-tile the int8 Q4_0xQ8_0 path (v_mfma_i32_16x16x16_i8); LDS-stage
+the shared X fragment in qgeglu and widen N-tiles; LDS-stage K/V and add a
+packed-QKV entry to gqa_swa.
+
+Raw results: kernel-local `make bench` output (this box); not committed as bulky
+traces per perf.md.
