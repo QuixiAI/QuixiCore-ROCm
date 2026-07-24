@@ -975,6 +975,75 @@ full-node collective sweeps.
 
 Raw results: `perf/results/2026-07-07/cdna3-port-fill/raw-summary.txt`.
 
+## 2026-07-07: Metal Gap Kernel Ports To CDNA3
+
+Status: landed functional coverage; optimization deferred except for the
+dense-GEMM direct-vs-LDS A/B.
+
+Current implementation: CDNA3 HIP variants for the Metal-only contract surfaces:
+`qk_norm_rope`, `qgemm_int`, `quant_rt` group variants, `matmul_custom`,
+`gemm_staged`, and `utils/marginal`.
+
+Current public route: standalone operation variants discovered by
+`scripts/build|test|bench --arch cdna3` under:
+
+- `kernels/norms/qk_norm_rope/variants/rocm_cdna3`
+- `kernels/quantization/qgemm_int/variants/rocm_cdna3`
+- `kernels/quantization/quant_rt/variants/rocm_cdna3`
+- `kernels/matmul/{matmul_custom,gemm_staged}/variants/rocm_cdna3`
+- `kernels/utils/marginal/variants/rocm_cdna3`
+
+References inspected: `../QuixiCore-Metal/kernels/{norms/qk_norm_rope,
+quantization/qgemm_int,quantization/quant_rt,matmul/matmul_custom,
+matmul/gemm_staged,utils/marginal}`, existing ROCm `qgemv`, `qgemm`,
+`norm_quant`, `int8`, and `flux` CDNA3 ports, `.quixicore/kernels.yaml`, and
+`perf/perf.md`.
+
+Correctness (MI300X/gfx942, ROCm/HIP 7.2.4, PyTorch 2.12.1+rocm7.2 in
+`~/QuixiCore/QuixiCore-ROCm/.venv`, command `make -C <variant> test`):
+
+- `qk_norm_rope`: D=64 split, D=128 interleaved, D=256 Gemma all PASS; rel
+  2.29e-03 to 2.45e-03 vs host oracle; V copy max <=3.91e-03 on test shapes.
+- `qgemm_int`: W8A8, W8A8-AZP, and W2A8 all PASS; rel <=2.67e-04.
+- `quant_rt`: per-group FP8 UE8M0 exact encoded codes/scales, per-group int8
+  <=0.5 code step, token int8 AZP rel 7.42e-03.
+- `matmul_custom`: f32 rel 1.81e-07, bf16 rel 1.40e-03.
+- `gemm_staged`: f32 rel 1.84e-07, bf16 rel 1.41e-03.
+- `marginal`: tau_tail, packbits big/little, segment_packbits, permute_cols all PASS.
+
+Focused timing (HIP-event median; warmups/iters are harness-local: qk and
+quant/marginal 20/100, qgemm_int and GEMMs 10/50 or 5/30; command
+`make -C <variant> bench`):
+
+| Kernel | Shape / dtype-format | Baseline/current | Candidate timing | Decision |
+|---|---|---:|---:|---|
+| qk_norm_rope | T=4096 HT=8 D=64 bf16 split | no prior ROCm surface | 0.0315 ms, 266 GB/s | KEEP coverage |
+| qk_norm_rope | T=4096 HT=8 D=128 bf16 interleaved | no prior ROCm surface | 0.0336 ms, 499 GB/s | KEEP coverage |
+| qk_norm_rope | T=4096 HT=8 D=256 bf16 Gemma | no prior ROCm surface | 0.0380 ms, 883 GB/s | KEEP coverage |
+| qgemm_w8a8 | N=512 M=64 K=1024 int8/half scales | no prior ROCm surface | 0.0208 ms, 3.23 TOPS | KEEP correctness route |
+| qgemm_w8a8_azp | N=512 M=64 K=1024 int8/f32 act scale | no prior ROCm surface | 0.0211 ms, 3.18 TOPS | KEEP correctness route |
+| qgemm_w2a8 | N=512 M=64 K=1024 BitNet W2A8 | no prior ROCm surface | 0.0216 ms, 3.10 TOPS-equivalent | KEEP correctness route |
+| quant_rt group fp8 | rows=4096 D=512 G=128 ue8m0 | no prior group variant | 0.0155 ms, 678 GB/s | KEEP coverage |
+| quant_rt group int8 | rows=4096 D=512 G=128 | norm_quant had related group int8 | 0.0139 ms, 754 GB/s | KEEP coverage |
+| quant_rt token int8 AZP | rows=4096 D=512 | norm_quant had related AZP | 0.0115 ms, 909 GB/s | KEEP coverage |
+| matmul_custom | 512^3 f32 | direct baseline | 0.0636 ms, 4.22 TFLOP/s | KEEP coverage |
+| gemm_staged | 512^3 f32 | matmul_custom direct 0.0636 ms | 0.0286 ms, 9.39 TFLOP/s | KEEP LDS staging for this surface |
+| matmul_custom | 512^3 bf16 | direct baseline | 0.0649 ms, 4.13 TFLOP/s | KEEP coverage |
+| gemm_staged | 512^3 bf16 | matmul_custom direct 0.0649 ms | 0.0563 ms, 4.77 TFLOP/s | KEEP LDS staging for this surface |
+| marginal tau_tail | T=4096 H=4 D=16 f32 | no prior ROCm surface | 0.0062 ms, 1013 GB/s | KEEP coverage |
+| marginal packbits | n=4194307 uint8/bool | no prior ROCm surface | 0.0061 ms, 684 GB/s input | KEEP coverage |
+
+Decision: KEEP all functional ports so Metal contract coverage exists in the
+ROCm tree. For dense GEMM, the LDS-staged variant beats the direct baseline on
+the measured 512^3 f32 shape and modestly improves bf16; this does not change
+the existing tuned dense GEMM routes and is not a speedup claim over MFMA,
+hipBLASLt, rocBLAS, or PyTorch. Follow-ups: replace the correctness-first dense
+GEMM surfaces with MFMA-backed implementations if they become public routes,
+tile `qgemm_int` beyond one CTA per output element, and add framework/library
+baselines for each surface.
+
+Raw results: `perf/results/2026-07-07/metal-gap-ports/`.
+
 ## Current Baseline Sources
 
 Status: baselines exist, not yet normalized into the shared harness.
