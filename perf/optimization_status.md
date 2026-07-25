@@ -1374,3 +1374,164 @@ Open questions / next levers: derive a per-query-block key range for structured
 double-buffering of K/V; larger BQ.
 
 Raw results: perf/results/2026-07-25/attention-biased_attention/
+
+## 2026-07-25: rope_variants — 8 RoPE operations (Metal/CPU parity Phase 1)
+
+Status: landed.
+
+Current implementation: `kernels/attention/rope_variants/variants/rocm_cdna3`
+Current public route: `.quixicore/kernels.yaml` operation `rope_variants`,
+covering `rotary_positioned`, `mrope`, `rope_table`,
+`rope_interleaved_to_split`, `rope_backward`, `qk_norm_rope_positioned`,
+`qk_norm_rope_split`, `rope_q_norm`.
+
+References inspected: `../QuixiCore-CPU/kernels/attention/{rotary_positioned_ref,
+attention_extended_ref,attention_ref,attention_serving_ref}.cpp` and
+`kernels/utils/tensor_ops_ref.cpp:515`.
+
+Grouped into one operation directory as `kernels/serving` (12 kernels) and
+`kernels/linear_attention` (3) already are: shared row geometry, shared lever.
+
+Correctness: **78/78 PASS** on MI300X vs. fp64 oracles, every operation checked
+at both lane widths. fp32 `rel ~2.5e-8 … 5.3e-8, cosine 1.000000000`; bf16 at the
+one-storage-ULP bound. Coverage: split and interleaved layouts, partial rotary
+(rd 64/96 against D=128), per-batch position tables, mrope sectioned and
+section-interleaved, GQA splits, a no-V-head case, the Gemma weight offset,
+qk_norm with mrope tables, split vs packed outputs, norm on/off, non-zero pos0.
+
+### Experiment 1 — pow -> exp2 + sincos: KEEP
+
+`rope_interleaved_to_split` and `rope_backward` derive angles from `base` and
+`pos0` instead of a table and were calling `pow()` per element. They sat at
+~1.2 TB/s while the table-driven variants reached ~4.0 TB/s, so the hypothesis
+was transcendental-bound rather than memory-bound. `base^e == exp2(e*log2(base))`
+with `log2(base)` loop-invariant turns a `pow` into one `exp2`; one `sincos`
+replaces a separate `cos` and `sin`. Still evaluated in double — the frequency
+spread across pairs is where float loses the low bits.
+
+| Kernel | Before | After | Speedup |
+|---|---:|---:|---:|
+| rope_interleaved_to_split | 0.4466 ms (1202 GB/s) | 0.2656 ms (2021 GB/s) | 1.68x |
+| rope_backward | 0.4416 ms (1216 GB/s) | 0.2809 ms (1912 GB/s) | 1.57x |
+
+### Experiment 2 — 32 -> 64 lanes per row: REJECT
+
+This repo's standard first lever for row kernels, worth +30-71% on the norm
+kernels (commit `1b77c18b`). Here it **lost on all eight operations**, reproduced
+across two independent runs:
+
+| Operation (shape) | 32 lanes/row | 64 lanes/row | Ratio |
+|---|---:|---:|---:|
+| rotary_positioned (B8 H32 T2048 D128) | 0.1327 ms (4045 GB/s) | 0.1538 ms (3492 GB/s) | 0.86x |
+| mrope (B8 H32 T2048 D128) | 0.1640 ms (3274 GB/s) | 0.1705 ms (3150 GB/s) | 0.96x |
+| rope_table (T16384 H32 D128) | 0.1375 ms (3905 GB/s) | 0.1544 ms (3476 GB/s) | 0.89x |
+| rope_interleaved_to_split (T16384 H32 D128) | 0.2656 ms (2021 GB/s) | 0.3194 ms (1681 GB/s) | 0.83x |
+| rope_backward (T16384 H32 D128) | 0.2809 ms (1912 GB/s) | 0.3165 ms (1696 GB/s) | 0.89x |
+| qk_norm_rope_positioned (T8192 Hq32 Hk8 Hv8 D128) | 0.1549 ms (2599 GB/s) | 0.1853 ms (2173 GB/s) | 0.84x |
+| qk_norm_rope_split (T8192 Hq32 Hk8 Hv8 D128) | 0.1533 ms (2626 GB/s) | 0.1864 ms (2160 GB/s) | 0.82x |
+| rope_q_norm (T16384 H32 D128) | 0.2493 ms (2154 GB/s) | 0.2758 ms (1947 GB/s) | 0.90x |
+
+**Why the norm result did not transfer, and why that matters for the remaining
+phases.** The norm win came from a shape where half the wavefront sat idle — 32
+threads assigned to a row inside a 64-wide wavefront. These kernels pack
+`kBlock / LANES` rows per block, so a 32-lane row already fills the wavefront
+with two rows; there is no idle half to reclaim. Halving the lanes per row
+instead doubles the pairs each lane owns, doubling the independent loads in
+flight, and with no cross-lane reduction to amortize, that ILP beats the wider
+row. Consistent with this, the three variants that *do* have a reduction
+(`qk_norm_rope_positioned`, `qk_norm_rope_split`, `rope_q_norm`) lose by the most
+(0.82-0.90x) — a 64-lane reduction costs an extra shuffle step.
+
+The lever is "fill the wavefront", not "widen the row". Where rows are already
+packed, widening is a regression. Selected configuration is `kRopeLanes = 32`,
+recorded as a constant beside this reasoning in the source.
+
+Environment:
+  GPU: AMD Instinct MI300X (gfx942), device index 1 (idle)
+  ROCm: 7.2.4   HIP: 7.2.53211-97f5574fe2
+  Container: bare metal (no container)
+  Command: HIP_VISIBLE_DEVICES=1 make -C kernels/attention/rope_variants/variants/rocm_cdna3 bench
+  Warmups/iterations: w25/i50, HIP-event median
+
+Measurement caveat, reported rather than suppressed: several timings show a
+min/max spread above the 1.2x warning threshold (up to 2.1x). The samples show a
+**single slow iteration** — min and median are tight (`min 0.1290 / median
+0.1327 / max 0.2696`) and medians reproduce to within 1.7% across independent
+runs. It reads as a clock or power transient, not contention; every conclusion
+above holds on the minima as well as the medians.
+
+Decision: **KEEP** experiment 1, **REJECT** experiment 2. Shipped bandwidth is
+3.3-4.0 TB/s for the table-driven variants, roughly 75% of MI300X HBM3 peak.
+
+Open questions: cache the cos/sin table row in LDS when many heads share a token
+(at H=32 the same row is re-read 32 times); vectorize to float4 for the split
+layout, where both halves of a pair are contiguous runs.
+
+Raw results: perf/results/2026-07-25/attention-rope_variants/
+
+## 2026-07-25: attn_composites — swin / decode-cache / cascade (Phase 1 complete)
+
+Status: landed. Completes Metal/CPU parity Phase 1 (13/13 kernels).
+
+Current implementation: `kernels/attention/attn_composites/variants/rocm_cdna3`
+Current public route: `.quixicore/kernels.yaml` operation `attn_composites`,
+covering `swin_attention_d32`, `decode_cache_attention`,
+`cascade_attention_multi`.
+
+References inspected: `../QuixiCore-CPU/kernels/attention/attention_extended_ref.cpp:602`,
+`attention_composites_ref.cpp:332` and `:470`.
+
+Correctness: **24/24 PASS** on MI300X vs. fp64 oracles, each operation checked in
+both baseline and candidate form. `decode_cache_attention` also verifies the
+mutated key cache, not just the attention output — the append stage is half the
+operation and a port that gets the cache slot wrong still produces plausible
+attention output. fp32 `rel ~1e-7 … 6e-7, cosine 1.000000000`.
+
+Contract details pinned by tests: Swin's mask index is
+`window % windows_per_image` (the shifted-window mask repeats per image);
+decode's attention bound is `[0, context_lengths[item]]` **inclusive**, so the
+token appended by stage 1 is visible to stage 2 in the same call; cascade runs
+one online softmax across prefix levels *and then* the paged tail in contract
+order, with `levels == 0` legal.
+
+| Operation | Baseline | Candidate | Speedup |
+|---|---:|---:|---:|
+| swin_attention_d32 (W1024 T49 H8) | 1.1245 ms global K/V | 1.0836 ms LDS K/V | 1.04x |
+| decode_cache_attention (B256 Hq32 Hkv8 D128 ctx4096) | 587.62 ms scalar | 13.16 ms wavefront | 44.64x |
+| cascade_attention_multi (B128 Hq32 Hkv8 D128 levels=2) | 109.69 ms scalar | 3.43 ms wavefront | 32.02x |
+
+Decision: **KEEP** all three. Two caveats recorded so the numbers are not
+misread.
+
+**The Swin LDS win is marginal — 3.8%, not the lever it looked like.** The
+hypothesis was that staging a window's K/V in LDS would pay because the global
+version re-reads them per query position. A Swin window's K and V are only
+`2 x 49 x 32 x 4 B ~= 12 KB`, so they are already cache-resident across the query
+positions of the same workgroup; LDS saves an L1/L2 round-trip, not a DRAM one.
+Kept (consistent at 1.03x spread, reduces cache pressure at larger `tokens`) but
+recorded as marginal rather than dressed up.
+
+**The 44.64x decode figure conflates two effects.** Its baseline is a direct
+scalar transliteration — one thread per output row — which *also* recomputes the
+query rotation inside the per-key dot product instead of materializing it, as a
+naive port would to avoid a scratch buffer. So the number mixes "scalar to
+wavefront" with "stop recomputing the rotation". The candidate's real structural
+advantages are lane-parallel dot products with coalesced cache reads plus holding
+the rotated query in registers across the cache walk. The cascade comparison has
+no such confound — both sides do identical arithmetic — and its **32.02x** is a
+clean scalar-vs-wavefront result. Read that one as the honest measure of the
+lever.
+
+Environment:
+  GPU: AMD Instinct MI300X (gfx942), device index 1 (idle)
+  ROCm: 7.2.4   HIP: 7.2.53211-97f5574fe2
+  Container: bare metal (no container)
+  Command: HIP_VISIBLE_DEVICES=1 make -C kernels/attention/attn_composites/variants/rocm_cdna3 bench
+  Warmups/iterations: w10-15/i30-50, HIP-event median; worst spread 1.10x
+
+Open questions: MFMA the Swin path (D=32 x tokens=49 rounds to 4 MFMA tiles and
+`biased_attention` already has the fragment layout); split-K over the context for
+`decode_cache_attention` at long contexts, reusing `merge_attn_states`;
+float4-vectorize the cache walk.
+
+Raw results: perf/results/2026-07-25/attention-attn_composites/

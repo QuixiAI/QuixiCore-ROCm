@@ -704,6 +704,66 @@ operations:
         status: implemented
         path: kernels/attention/biased_attention/variants/rocm_cdna3
 
+  rope_variants:
+    family: attention
+    status: implemented
+    path: kernels/attention/rope_variants
+    notes: >-
+      The eight RoPE operations the Metal/CPU manifests publish that ROCm lacked:
+      rotary_positioned, mrope, rope_table, rope_interleaved_to_split,
+      rope_backward, qk_norm_rope_positioned, qk_norm_rope_split, rope_q_norm.
+      Grouped in one operation dir as kernels/serving and kernels/linear_attention
+      already are. Split (p, half+p) and interleaved (2p, 2p+1) pair layouts are
+      both supported and never conflated; mrope and rope_q_norm are split-only by
+      contract; rope_interleaved_to_split converts layout as part of the rotation;
+      rope_backward applies the transpose (rotation by -theta), not the forward
+      with swapped operands. A rotary_dim < head_dim leaves the tail unrotated --
+      copied through for the plain variants, normalized+weighted but unrotated for
+      the qk_norm variants -- and every rotary_dim-taking variant has a partial
+      case. qk_norm variants RMS over the FULL head_dim (not rotary_dim), apply
+      norm+weight BEFORE rotation, and copy V heads through; weight_offset carries
+      Gemma's (1+w) convention. fp32/bf16/fp16 storage. 78/78 PASS vs fp64
+      (fp32 rel ~2.5e-8, cosine 1.0). Perf: pow->exp2+sincos KEEP (1.68x
+      interleaved_to_split, 1.57x rope_backward, both were transcendental-bound);
+      32->64 lanes/row REJECTED on all eight (0.82-0.96x) because these pack
+      rows-per-block so a 32-lane row already fills the wavefront -- the norm
+      widening win does not transfer. Ships at 32 lanes/row, 3.3-4.0 TB/s
+      (~75% of HBM3 peak) on MI300X.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/attention/rope_variants/variants/rocm_cdna3
+
+  attn_composites:
+    family: attention
+    status: implemented
+    path: kernels/attention/attn_composites
+    notes: >-
+      Composite attention shapes ported from the CPU references:
+      swin_attention_d32, decode_cache_attention, cascade_attention_multi.
+      Grouped in one operation dir as kernels/serving already is. Swin takes
+      token-interleaved packed QKV ((pos*3 + which)*heads + head), fixed D=32, the
+      reference's hardcoded 0.1767766952966369 scale, per-head relative bias, and
+      a mask indexed by window %% windows_per_image -- the shifted-window mask
+      repeats per image, so the raw window index would mis-shift every window past
+      the first image. decode_cache_attention is two dependent stages: RoPE +
+      optional K-norm + cache append at slot context_lengths[item], then attention
+      over slots [0, context] INCLUSIVE, so the just-appended token is visible to
+      the same call; that cross-workgroup dependency forces a launch boundary.
+      cascade_attention_multi runs ONE online softmax across N prefix levels (via
+      a device pointer array) and then the paged tail, in contract order, so the
+      two cannot be computed independently without a merge step; levels=0 is legal.
+      fp32. 24/24 PASS vs fp64 (rel ~1e-7 to 6e-7, cosine 1.0), including the
+      mutated key cache. Perf: decode 44.64x and cascade 32.02x over scalar
+      transliteration baselines (the decode baseline also recomputes the query
+      rotation per key, so that figure conflates two effects; cascade's is a clean
+      scalar-vs-wavefront result); Swin LDS K/V staging only 1.04x because a
+      window's K/V is ~12 KB and already cache-resident.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/attention/attn_composites/variants/rocm_cdna3
+
 notes:
   - Normal build and test discovery must filter by `variants/rocm_<target>` and skip archive directories.
   - Upstream architecture branches are import sources only; supported target variants live side by side in main.

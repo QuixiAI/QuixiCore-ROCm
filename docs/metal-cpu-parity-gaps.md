@@ -41,7 +41,7 @@ the kernel; a missing entry does not.
 | Phase | Area | Kernels | planned | active | landed |
 | --- | --- | ---: | ---: | ---: | ---: |
 | 0 | Harness infrastructure | — | — | — | done |
-| 1 | Attention & RoPE variants | 13 | 11 | 0 | 2 |
+| 1 | Attention & RoPE variants | 13 | 0 | 0 | **13** |
 | 2 | Quantized KV-cache codecs | 17 | 17 | 0 | 0 |
 | 3 | Dense matmul epilogues | 10 | 10 | 0 | 0 |
 | 4 | MoE completeness | 7 | 7 | 0 | 0 |
@@ -54,7 +54,7 @@ the kernel; a missing entry does not.
 | 11 | Elementwise & tensor-op surface | 42 | 42 | 0 | 0 |
 | 12 | Convolution & audio | 16 | 16 | 0 | 0 |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **176** | **0** | **2** |
+| | **Total** | **178** | **165** | **0** | **13** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -78,17 +78,17 @@ bias; `swin_attention_d32` is a packed-D32 adapter over `biased_attention`.
 | --- | --- | --- | --- |
 | `cross_attention` | `attention/cross_attention_ref.cpp` | — | **landed** |
 | `biased_attention` | `attention/attention_extended_ref.cpp` | — | **landed** |
-| `swin_attention_d32` | `attention/attention_composites_ref.cpp` | `attention/swin_attn` | planned |
-| `decode_cache_attention` | `attention/attention_serving_ref.cpp` | `attention/attn_decode` | planned |
-| `cascade_attention_multi` | `attention/attention_composites_ref.cpp` | — | planned |
-| `mrope` | `attention/rotary_positioned_ref.cpp` | `attention/rotary` | planned |
-| `rotary_positioned` | `attention/rotary_positioned_ref.cpp` | `attention/rotary` | planned |
-| `rope_table` | `attention/rotary_positioned_ref.cpp` | `attention/rotary` | planned |
-| `rope_interleaved_to_split` | `attention/rotary_positioned_ref.cpp` | `attention/rotary` | planned |
-| `rope_backward` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `qk_norm_rope_positioned` | `attention/attention_extended_ref.cpp` | `norms/qk_norm_rope` | planned |
-| `qk_norm_rope_split` | `attention/attention_extended_ref.cpp` | `norms/qk_norm_rope` | planned |
-| `rope_q_norm` | `attention/attention_extended_ref.cpp` | `norms/qk_norm_rope` | planned |
+| `swin_attention_d32` | `attention/attention_composites_ref.cpp` | `attention/swin_attn` | **landed** |
+| `decode_cache_attention` | `attention/attention_serving_ref.cpp` | `attention/attn_decode` | **landed** |
+| `cascade_attention_multi` | `attention/attention_composites_ref.cpp` | — | **landed** |
+| `mrope` | `attention/rotary_positioned_ref.cpp` | `attention/rotary` | **landed** |
+| `rotary_positioned` | `attention/rotary_positioned_ref.cpp` | `attention/rotary` | **landed** |
+| `rope_table` | `attention/rotary_positioned_ref.cpp` | `attention/rotary` | **landed** |
+| `rope_interleaved_to_split` | `attention/rotary_positioned_ref.cpp` | `attention/rotary` | **landed** |
+| `rope_backward` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `qk_norm_rope_positioned` | `attention/attention_extended_ref.cpp` | `norms/qk_norm_rope` | **landed** |
+| `qk_norm_rope_split` | `attention/attention_extended_ref.cpp` | `norms/qk_norm_rope` | **landed** |
+| `rope_q_norm` | `attention/attention_extended_ref.cpp` | `norms/qk_norm_rope` | **landed** |
 
 ## Phase 2 — Quantized KV-Cache Codecs And Decode Attention (17)
 

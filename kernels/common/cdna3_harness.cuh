@@ -190,6 +190,35 @@ __host__ inline double round_bf16(double v) {
 }
 
 // ---------------------------------------------------------------------------
+// Storage traits for kernels that only load, convert and store
+// ---------------------------------------------------------------------------
+// The sibling contract accepts FP32/FP16/BF16 storage on every floating tensor.
+// Kernels that do no tensor-core math need only conversion, so these traits let
+// one kernel body serve all three. (MFMA kernels want `cdna3_mfma.cuh` instead,
+// whose traits also carry the fragment type and the matmul intrinsic.)
+
+struct StorageF32 {
+    using storage = float;
+    static constexpr const char *name = "fp32";
+    __device__ __host__ static float to_float(storage v) { return v; }
+    __device__ __host__ static storage from_float(float v) { return v; }
+};
+
+struct StorageBf16 {
+    using storage = __hip_bfloat16;
+    static constexpr const char *name = "bf16";
+    __device__ static float to_float(storage v) { return __bfloat162float(v); }
+    __device__ static storage from_float(float v) { return __float2bfloat16(v); }
+};
+
+struct StorageFp16 {
+    using storage = __half;
+    static constexpr const char *name = "fp16";
+    __device__ static float to_float(storage v) { return __half2float(v); }
+    __device__ static storage from_float(float v) { return __float2half(v); }
+};
+
+// ---------------------------------------------------------------------------
 // Tolerances -- mirrors ../../registry/tolerances.yaml
 // ---------------------------------------------------------------------------
 
@@ -250,6 +279,16 @@ struct Tol {
         return t;
     }
 };
+
+/// Storage-appropriate tolerance for a trait from the block above. Picks the
+/// one-storage-ULP variant for narrow floats, since these traits describe the
+/// type the result is *stored* in.
+template <typename S>
+inline Tol tol_for() {
+    if (std::is_same<S, StorageBf16>::value) return Tol::bf16_output();
+    if (std::is_same<S, StorageFp16>::value) return Tol::fp16_output();
+    return Tol::fp32();
+}
 
 // ---------------------------------------------------------------------------
 // Comparison against an fp64 oracle
