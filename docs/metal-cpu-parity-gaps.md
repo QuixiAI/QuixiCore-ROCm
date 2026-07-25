@@ -42,7 +42,7 @@ the kernel; a missing entry does not.
 | --- | --- | ---: | ---: | ---: | ---: |
 | 0 | Harness infrastructure | — | — | — | done |
 | 1 | Attention & RoPE variants | 13 | 0 | 0 | **13** |
-| 2 | Quantized KV-cache codecs | 17 | 17 | 0 | 0 |
+| 2 | Quantized KV-cache codecs | 17 | 13 | 0 | 4 |
 | 3 | Dense matmul epilogues | 10 | 10 | 0 | 0 |
 | 4 | MoE completeness | 7 | 7 | 0 | 0 |
 | 5 | BaseQ canonical family | 9 | 9 | 0 | 0 |
@@ -54,7 +54,7 @@ the kernel; a missing entry does not.
 | 11 | Elementwise & tensor-op surface | 42 | 42 | 0 | 0 |
 | 12 | Convolution & audio | 16 | 16 | 0 | 0 |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **165** | **0** | **13** |
+| | **Total** | **178** | **161** | **0** | **17** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -103,10 +103,10 @@ mode, group size, and FP16/FP32 scale encoding.
 
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `kv_cache_scatter_q8_0` | `serving/serving_quant_ref.cpp` | `serving/kv_cache` | planned |
-| `kv_cache_gather_q8_0` | `serving/serving_quant_ref.cpp` | `serving/kv_cache` | planned |
-| `kv_cache_copy_blocks_q8_0` | `serving/serving_quant_ref.cpp` | `serving/kv_cache` | planned |
-| `paged_attention_q8_0` | `attention/attention_q8_kv.cpp` | — | planned |
+| `kv_cache_scatter_q8_0` | `serving/serving_quant_ref.cpp` | `serving/kv_cache` | **landed** |
+| `kv_cache_gather_q8_0` | `serving/serving_quant_ref.cpp` | `serving/kv_cache` | **landed** |
+| `kv_cache_copy_blocks_q8_0` | `serving/serving_quant_ref.cpp` | `serving/kv_cache` | **landed** |
+| `paged_attention_q8_0` | `attention/attention_q8_kv.cpp` | — | **landed** |
 | `kv_cache_scatter_mxfp8` | `serving/serving_quant_ref.cpp` | — | planned |
 | `kv_cache_gather_mxfp8` | `serving/serving_quant_ref.cpp` | — | planned |
 | `paged_attention_mxfp8` | `attention/attention_mxfp8.cpp` | — | planned |

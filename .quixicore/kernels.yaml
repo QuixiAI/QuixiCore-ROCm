@@ -764,6 +764,36 @@ operations:
         status: implemented
         path: kernels/attention/attn_composites/variants/rocm_cdna3
 
+  kv_cache_q8_0:
+    family: serving
+    status: implemented
+    path: kernels/serving/kv_cache_q8_0
+    notes: >-
+      Q8_0 paged KV-cache codec ported from the CPU reference attention_q8_kv.cpp:
+      kv_cache_scatter_q8_0, kv_cache_gather_q8_0, kv_cache_copy_blocks_q8_0,
+      paged_attention_q8_0. Canonical layout is TWO SEPARATE PLANES -- int8 codes
+      [slots, heads, head_dim] and raw fp16-bit scales [slots, heads, head_dim/32]
+      -- not the GGUF interleaved block; packing a scale ahead of each 32-code run
+      yields plausible numbers and a cache no sibling can read. Quantization is
+      scale = amax/127 with code = clamp(copysign(floor(|v/scale|+0.5), v), -127,
+      127): round-half-AWAY-from-zero, not rintf's half-to-even, which is why the
+      code planes compare bit-exact. amax==0 stores scale 0 / codes 0 rather than
+      dividing by zero. Scatter REWRITES THE WHOLE CACHE (zero-fill then write;
+      slot -1 skipped and left zeroed) -- the test pre-dirties with 0x7f so a
+      missing zero-fill fails. A negative block id is a hole: zeroed on gather,
+      skipped entirely in attention (not a zero score). The decode softmax is
+      TILED over 32 keys with one rescale per tile, not per-key online, and is
+      reproduced exactly so the backends stay comparable; sliding window is
+      first = window>0 ? max(0, context-window) : 0. Query stays fp32. 28/28 PASS
+      (codes/scales/copy bit-exact; attention rel ~1.5e-7, cosine 1.0) across
+      D 64/128/256, page 16/32, MQA and GQA, holes, all-zero groups, window, and
+      explicit scale. 6.91x over a scalar transliteration on MI300X, both sides
+      doing identical arithmetic.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/serving/kv_cache_q8_0/variants/rocm_cdna3
+
 notes:
   - Normal build and test discovery must filter by `variants/rocm_<target>` and skip archive directories.
   - Upstream architecture branches are import sources only; supported target variants live side by side in main.

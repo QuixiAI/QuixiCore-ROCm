@@ -1535,3 +1535,66 @@ Open questions: MFMA the Swin path (D=32 x tokens=49 rounds to 4 MFMA tiles and
 float4-vectorize the cache walk.
 
 Raw results: perf/results/2026-07-25/attention-attn_composites/
+
+## 2026-07-25: kv_cache_q8_0 — Q8_0 paged KV codec (Phase 2, 4/17)
+
+Status: landed.
+
+Current implementation: `kernels/serving/kv_cache_q8_0/variants/rocm_cdna3`
+Current public route: `.quixicore/kernels.yaml` operation `kv_cache_q8_0`,
+covering `kv_cache_scatter_q8_0`, `kv_cache_gather_q8_0`,
+`kv_cache_copy_blocks_q8_0`, `paged_attention_q8_0`.
+
+References inspected: `../QuixiCore-CPU/kernels/attention/attention_q8_kv.cpp`
+(:102, :235, :351, :417).
+
+Correctness: **28/28 PASS** on MI300X. Scatter code and scale planes and
+`copy_blocks` compare **bit-exact**; gather is exact (a pure dequantize);
+`paged_attention_q8_0` is `rel ~1.5e-7, cosine 1.000000000` against an fp64
+oracle that mirrors the reference's 32-key tiling and its `double` denominator.
+Coverage: head dims 64/128/256, page sizes 16/32, MQA and GQA, block-table holes,
+skipped scatter slots, an all-zero quantization group, sliding window, explicit
+score scale.
+
+Four contract details pinned by tests, each of which a plausible port gets wrong:
+
+1. The layout is **two separate planes** (int8 codes, raw fp16-bit scales), not
+   the GGUF interleaved block. Packing a scale ahead of each 32-code run yields
+   numbers that look right and a cache no sibling backend can read.
+2. Rounding is `copysign(floor(|x| + 0.5), x)` — half **away from** zero, not
+   `rintf`'s half-to-even. This is why the code planes can be asserted bit-exact
+   instead of within a tolerance, which is a much stronger test.
+3. Scatter **rewrites the whole cache**: zero-fill everything, then write the
+   requested slots, leaving `-1` slots zeroed. The test pre-dirties the cache
+   with `0x7f` first, so omitting the zero-fill fails rather than passing on the
+   slots it happened to touch.
+4. A negative block id is a **hole**: zeroed on gather, and skipped entirely in
+   attention — which is not the same as contributing a zero score.
+
+Baseline: direct scalar transliteration, one thread per output row.
+Experiments: one factor — give each row a 32-lane group, hold the query in
+registers, and compute each tile's score with a lane-parallel dot plus a
+wavefront reduction. The 32-key tiling and its single rescale per tile are
+preserved on both sides.
+
+| Shape | Baseline | Candidate | Speedup |
+|---|---:|---:|---:|
+| B128 Hq32 Hkv8 D128 ctx512 | 7.2420 ms | 1.0480 ms | 6.91x |
+
+Both sides do identical arithmetic, so unlike the `decode_cache_attention` A/B
+recorded above this figure is not confounded by a second change.
+
+Environment:
+  GPU: AMD Instinct MI300X (gfx942), device index 1 (idle)
+  ROCm: 7.2.4   HIP: 7.2.53211-97f5574fe2
+  Container: bare metal (no container)
+  Command: HIP_VISIBLE_DEVICES=1 make -C kernels/serving/kv_cache_q8_0/variants/rocm_cdna3 bench
+  Warmups/iterations: w5-10/i20-30, HIP-event median; worst spread 1.06x
+
+Decision: **KEEP**.
+
+Open questions: `__builtin_amdgcn_sdot4` for the score dot product with a
+per-tile quantized query — the repo's int8 GEMM already measured a win from
+sdot4; split-K over the context with `merge_attn_states`; vectorized code loads.
+
+Raw results: perf/results/2026-07-25/serving-kv_cache_q8_0/
