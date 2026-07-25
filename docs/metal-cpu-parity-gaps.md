@@ -101,6 +101,34 @@ domain until one final inverse transform and canonical K **not** transformed;
 BitNet-KV3 keeps low-bit-first ordering with explicit signedness, zero-point
 mode, group size, and FP16/FP32 scale encoding.
 
+### Reconnaissance for the remaining 13 (read this before starting)
+
+**MXFP8** (`attention_mxfp8.cpp`). Unlike Q8_0's two planes, MXFP8 is a single
+**interleaved 33-byte block**: `[e8m0 scale byte][32 × e4m3 code bytes]`, indexed
+`((row*heads + head)*groups + group) * 33`. `head_dim` must be 64 or 128.
+Encoding is `scale_code = e8m0_encode_up(amax / 448.0)` then
+`code = e4m3_encode(v / e8m0_decode(scale_code))`. A scale byte of 255 is the
+**invalid marker** — the reference rejects any cache row containing it, and
+`paged_attention_mxfp8` validates the whole reachable cache up front rather than
+skipping bad rows. Its score tile is **16**, not Q8_0's 32.
+
+`kernels/quantization/qgemv/variants/rocm_cdna3/quant_formats.cuh` already
+provides device `e4m3_encode`/`e4m3_decode`/`e8m0_decode` and documents the same
+33-byte block, so most of the codec is reusable. **But its `e8m0_encode` is raw
+exponent extraction (truncation), while the reference needs
+`e8m0_encode_up` = `clamp(ceil(log2(x)) + 127, 0, 254)`.** Those differ for every
+non-power-of-two input. Reusing the existing helper produces a cache that is
+subtly wrong and still round-trips through its own decode — write
+`e8m0_encode_up` separately.
+
+**BitNet-KV3** (`attention_bitnet_kv3.cpp`, 609 lines) is the largest remaining
+codec: low-bit-first ordering with explicit signedness, zero-point mode, group
+size, and FP16/FP32 scale encoding all as parameters.
+
+**TurboQuant** (`attention_turboquant.cpp`) keeps K packed and V *rotated*, with
+V staying in the signed-FWHT domain until one final inverse transform; canonical
+K is **not** transformed. `turboquant_query_transform` is the query-side half.
+
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
 | `kv_cache_scatter_q8_0` | `serving/serving_quant_ref.cpp` | `serving/kv_cache` | **landed** |
