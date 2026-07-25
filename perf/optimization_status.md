@@ -1142,3 +1142,235 @@ packed-QKV entry to gqa_swa.
 
 Raw results: kernel-local `make bench` output (this box); not committed as bulky
 traces per perf.md.
+
+## 2026-07-25: Metal/CPU Parity Program — Phase 0 Harness Infrastructure
+
+Status: landed scaffolding (no performance claim).
+
+Diffed this backend against the Metal and CPU operation manifests, which publish
+a much larger surface than QuixiCore-CUDA's family-level metadata. Result: 178
+operations in 13 groups have no CDNA3 implementation, including two families
+with no directory at all (vision, convolution/audio). Inventory and per-kernel
+work list: `docs/metal-cpu-parity-gaps.md`.
+
+The program commits to a focused perf run for **every** one of those 178
+kernels, so Phase 0 builds the infrastructure that makes each run cheap rather
+than bespoke:
+
+- `kernels/common/cdna3_harness.cuh` — fp64-oracle comparison with tolerances
+  taken from `../registry/tolerances.yaml`, deterministic host RNG (including an
+  adversarial generator for zero/denormal/huge/signed cases), wave64 reductions
+  (sum/max/min/inclusive-scan/argmax), and a timing loop reporting median, min,
+  max, spread, GB/s, and TFLOP/s.
+- `kernels/common/harness_selftest.cu` — validates the harness itself.
+- `perf/harness/run_kernel_bench.sh` — runs a kernel harness, archives raw
+  output under `perf/results/<date>/<label>/` with GPU/ROCm/HIP/commit/container
+  provenance, and emits a pre-filled notebook entry.
+- `perf/configs/shapes.yaml` — mirrors `../registry/benchmark-shapes.yaml` and
+  adds per-family shape sets for the families being brought to parity.
+
+Two decisions worth recording, because they affect every downstream verdict:
+
+1. `Comparison::pass()` requires **both** an elementwise rtol/atol check and
+   aggregate rel-L1 + cosine bounds. Elementwise alone misses systematic drift
+   at loose quantized tolerances; aggregate alone misses a single bad lane. The
+   self-test asserts that `compare()` rejects a single bad element, a 2%
+   systematic scale error, a NaN, and a size mismatch — a comparison helper that
+   cannot fail is worse than none.
+2. `wave_reduce_argmax` breaks ties toward the **lower** index. This is
+   contractual for LM-head/argmax operations (Metal and CPU both specify
+   lower-token tie breaking) and is covered by a dedicated all-tie test rather
+   than left to random data.
+
+Correctness: `make -C kernels/common test` — ALL PASS, 12 checks on MI300X.
+Reductions verified against an fp64 host oracle at a deliberately ragged 37x501
+shape (neither dimension a multiple of the 64-wide wavefront).
+
+Environment:
+  GPU: AMD Instinct MI300X (gfx942:sramecc+:xnack-), 304 CUs, 64 KB LDS/block
+  ROCm: 7.2.4   HIP: 7.2.53211-97f5574fe2
+  Container: bare metal (no container)
+  Command: HIP_VISIBLE_DEVICES=0 make -C kernels/common test
+
+Also wired `scripts/test kernels` to run the harness self-test before the kernel
+sweep. Kernel discovery only descends into `variants/rocm_<arch>/`, so
+`kernels/common` was invisible to it; shared infrastructure that no sweep
+exercises goes stale silently.
+
+Baseline / Experiments: none — this entry is scaffolding and claims no speedup.
+`AGENTS.md` permits docs/metadata commits to skip the kernel perf run provided
+they make no performance claim. This one makes none.
+
+Decision: keep. Phase 1 (attention and RoPE variants) is next; the first
+measured kernel entries follow there.
+
+Open questions: none blocking. The CDNA4 variant gap is out of scope and tracked
+separately — MI300X is the only hardware here, and an unmeasured gfx950 claim
+would violate the gate.
+
+Raw results: perf/results/2026-07-25/common/
+
+## 2026-07-25: cross_attention (Metal/CPU parity Phase 1)
+
+Status: landed.
+
+Current implementation: `kernels/attention/cross_attention/variants/rocm_cdna3`
+Current public route: `.quixicore/kernels.yaml` operation `cross_attention`
+(family `attention`).
+
+References inspected: `../QuixiCore-CPU/kernels/attention/cross_attention_ref.cpp`
+(semantic source), `kernels/attention/gqa/variants/rocm_cdna3/attn_mfma.cuh`
+(validated MFMA fragment layout), `../QuixiCore-CPU/docs/sibling-port-matrix.md`
+(published contract: per-batch key lengths, optional score bias, automatic or
+explicit scale, score softcap, D64/D128/D256).
+
+First kernel of the 178-operation Metal/CPU parity program
+(`docs/metal-cpu-parity-gaps.md`). ROCm had no cross-attention: the landed
+self-attention kernel assumes one sequence length and `N % 16 == 0`, neither of
+which holds here.
+
+Correctness: **50/50 PASS** on MI300X vs. an fp64 host oracle mirroring the CPU
+reference. Both the MFMA candidate and the baseline are checked on every case.
+  Tolerance: bf16 (rel 4e-3, cosine 0.99999) and fp16 (rel 2e-3, cosine 0.999995)
+  from `../registry/tolerances.yaml`. Observed rel ~2.2e-3 / cosine ~0.999997
+  (bf16) and rel ~2.6e-4 / cosine ~0.99999996 (fp16).
+  Shapes: MHA and GQA 4:1; ragged per-batch key lengths; an over-long key length
+  that must clamp; an empty batch item; bias; softcap 30; bias + softcap 20;
+  explicit scale; Lq=1 decode; Lk=2048; D 64/128/256; bf16 and fp16.
+
+Three contract details that a naive port gets wrong, all now covered by tests:
+
+1. Bias is added to the **scaled** score and the softcap is applied **after** the
+   bias. Any other order changes results when both are present.
+2. A batch item with zero valid keys must emit an all-zero row, not divide by a
+   zero denominator.
+3. On the first key tile the running max is `-inf`, and `exp(-inf - -inf)` is
+   `NaN`. The correction factor is special-cased to 0 there. Without this the
+   kernel silently produces NaNs on exactly the ragged inputs cross-attention
+   exists to serve.
+
+Baseline: one wavefront per query row, head dim split across lanes, one
+wavefront dot-product per key. Same math; re-reads K/V once per query.
+Experiments: single factor changed — MFMA BQ=BK=16 tiling so each K/V tile is
+read once per 16 queries, with QK^T and P@V on v_mfma_f32_16x16x16bf16_1k.
+
+| Shape (B,Hq,Hkv,Lq,Lk,D) | Baseline | Candidate | Speedup |
+|---|---:|---:|---:|
+| prefill 4,32,8,512,512,64 | 2.5900 ms (3.3 TFLOP/s) | 0.2782 ms (30.9 TFLOP/s) | 9.31x |
+| prefill 4,32,8,512,512,128 | 3.3491 ms (5.1 TFLOP/s) | 0.5347 ms (32.1 TFLOP/s) | 6.26x |
+| prefill 2,32,8,512,2048,128 | 7.5734 ms (4.5 TFLOP/s) | 1.1357 ms (30.3 TFLOP/s) | 6.67x |
+| enc-dec 8,16,4,128,1024,128 | 1.8896 ms (4.5 TFLOP/s) | 0.4714 ms (18.2 TFLOP/s) | 4.01x |
+| ragged 4,16,4,517,1031,128 | 0.9731 ms (17.9 TFLOP/s) | 0.3998 ms (43.7 TFLOP/s) | 2.43x |
+| bias 4,16,4,256,1024,128 | 1.8694 ms (4.6 TFLOP/s) | 0.5813 ms (14.8 TFLOP/s) | 3.22x |
+
+Environment:
+  GPU: AMD Instinct MI300X (gfx942), device index 1 (idle; the sweep held GPU 0)
+  ROCm: 7.2.4   HIP: 7.2.53211-97f5574fe2
+  Container: bare metal (no container)
+  Commit: 7d969a1d (working tree dirty — kernel not yet committed at measure time)
+  Command: HIP_VISIBLE_DEVICES=1 make -C kernels/attention/cross_attention/variants/rocm_cdna3 bench
+  Warmups/iterations: w10/i50, HIP-event median; worst spread 1.07x
+
+**Measurement hygiene — a result that inverted under contention.** The first A/B
+was taken while an unrelated kernel sweep held GPU 0. It reported the ragged
+shape as a **0.64x regression** with a 4.12x min/max spread, and two other shapes
+showed 3.1x and 5.1x spread. Re-measured on an idle GPU the same ragged shape is
+a **2.43x win** at 1.04x spread. The median was measuring contention, not the
+kernel. `perf/harness/run_kernel_bench.sh` now warns when any reported spread
+exceeds 1.2x, and the Makefile no longer hardcodes `HIP_VISIBLE_DEVICES=0` so a
+run pinned to an idle device records that device index truthfully rather than
+claiming a device it did not use.
+
+Decision: **KEEP**. The win holds on every measured shape and is largest where
+K/V reuse dominates. No shape regressed.
+
+Open questions / next levers: LDS double-buffering of K/V tiles (the loop
+currently loads the next tile after `__syncthreads()`, idling the MFMA units);
+larger BQ (32/64 queries per wavefront) for arithmetic intensity — the same
+lever already noted for the self-attention kernel at 0.30x of SDPA flash. fp32
+storage and a packed-QKV entry point are deferred until a caller needs them.
+
+Raw results: perf/results/2026-07-25/attention-cross_attention/
+
+## 2026-07-25: biased_attention (Metal/CPU parity Phase 1)
+
+Status: landed.
+
+Current implementation: `kernels/attention/biased_attention/variants/rocm_cdna3`
+Current public route: `.quixicore/kernels.yaml` operation `biased_attention`.
+
+References inspected: `../QuixiCore-CPU/kernels/attention/attention_extended_ref.cpp`
+(~L357, semantic source), `kernels/common/cdna3_mfma.cuh`, the `cross_attention`
+entry above.
+
+Correctness: **50/50 PASS** on MI300X vs. an fp64 host oracle. MHA and GQA 4:1;
+per-head bias; banded, causal, and one-fully-masked-row masks; bias+mask; ragged
+37x101; negative and positive explicit scale; Lq=1 decode; D 32/64/128/256
+(32 is the Swin head dim); bf16 and fp16.
+
+Two contract details differ from `cross_attention` and are pinned by tests:
+the bias is indexed **per head** while the mask is a single `[Lq, Lk]` plane
+**shared** across heads; and automatic scale triggers on `scale == 0`, not
+`scale > 0`, so a negative explicit scale is legal and must be honoured.
+
+Baseline: one wavefront per query row, wavefront dot-product per key — and it
+**skips masked keys outright**.
+Experiments: two, run in sequence.
+
+**Experiment 1 — MFMA BQ=BK=16 tiling (as for `cross_attention`).** Won on dense
+shapes but **lost on sparse masks**: a ±8 banded mask at Lq=Lk=1024 measured
+**0.70x, a real regression**. Cause is structural, not incidental — the tiled
+kernel walked all Lk tiles regardless of the mask, doing roughly 64x the
+necessary work, while the baseline touches ~17 keys per query.
+
+**Experiment 2 — masked-tile skipping.** The wavefront reads the 16x16 mask tile
+(256 bytes), OR-reduces liveness, and skips the K/V load plus D/16 MFMAs when
+nothing is live. The block is exactly one wavefront, so the reduced predicate is
+uniform and `continue` cannot desynchronize the loop's `__syncthreads()`.
+
+| Shape (Hq,Hkv,Lq,Lk,D) | Baseline | Candidate | Speedup |
+|---|---:|---:|---:|
+| 32,8,512,512,128 + bias | 1.3981 ms (3.1 TFLOP/s) | 0.2962 ms (14.5 TFLOP/s) | 4.72x |
+| 32,8,512,2048,128 + bias | 5.8754 ms (2.9 TFLOP/s) | 1.1525 ms (14.9 TFLOP/s) | 5.10x |
+| 16,4,1024,1024,128 banded | 0.3549 ms (24.2 TFLOP/s) | 0.0980 ms (87.7 TFLOP/s) | 3.62x |
+| 32,8,512,512,128 causal | 0.8525 ms (5.0 TFLOP/s) | 0.2942 ms (14.6 TFLOP/s) | 2.90x |
+| 32,8,512,512,64 + bias | 0.9856 ms (2.2 TFLOP/s) | 0.2025 ms (10.6 TFLOP/s) | 4.87x |
+
+The banded case went **0.70x -> 3.62x** on experiment 2 alone, and is now the
+fastest absolute result in the table (87.7 TFLOP/s) because the tile skip lets
+the kernel do proportionally less work as the mask gets sparser.
+
+Environment:
+  GPU: AMD Instinct MI300X (gfx942), device index 1 (idle)
+  ROCm: 7.2.4   HIP: 7.2.53211-97f5574fe2
+  Container: bare metal (no container)
+  Command: HIP_VISIBLE_DEVICES=1 make -C kernels/attention/biased_attention/variants/rocm_cdna3 bench
+  Warmups/iterations: w10/i50, HIP-event median; worst spread 1.15x
+
+### Harness change: a tolerance that could not be met
+
+The causal 512x512 case initially failed with exactly one bad element out of
+2,097,152: `got -1.3671875 vs ref -1.37182645`, absolute error 4.6e-3.
+
+Not a kernel bug. bf16 keeps 8 mantissa bits, so near magnitude 1.4 representable
+values are 7.8e-3 apart and the two candidates are 1.3671875 and 1.375 — the
+kernel landed one ULP below correctly-rounded. The registry's bf16 atol of 2e-3
+is **smaller than a single bf16 ULP** there, so for a bf16-*stored* output that
+elementwise bound is unsatisfiable in the worst case and passing it is luck.
+
+`kernels/common/cdna3_harness.cuh` now provides `qc::Tol::bf16_output()` and
+`fp16_output()`, which raise **only** the elementwise relative bound to one
+storage ULP (2^-8 / 2^-10) and leave the aggregate rel-L1 and cosine bounds at
+the registry values. The aggregates remain the real correctness signal: a
+genuinely wrong kernel moves them; one-ULP storage noise does not. Applies to any
+kernel whose output is stored in a narrow float; kernels producing fp32 keep the
+plain registry tolerances. `cross_attention` was switched to the same bound and
+still passes (it also passed the stricter one).
+
+Decision: **KEEP** both experiments. No shape regresses.
+
+Open questions / next levers: derive a per-query-block key range for structured
+(banded/causal) masks so the tile scan itself can be skipped; LDS
+double-buffering of K/V; larger BQ.
+
+Raw results: perf/results/2026-07-25/attention-biased_attention/

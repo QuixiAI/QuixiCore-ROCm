@@ -255,8 +255,19 @@ run_unit_tests_for_arch() {
   esac
 }
 
+# The shared kernel harness (kernels/common/cdna3_harness.cuh) has no variants/
+# directory, so kernel discovery never reaches it. Run its self-test first in a
+# full sweep: every kernel's correctness verdict depends on those helpers being
+# right, so a broken harness must fail loudly before anything else runs.
+run_common_harness_selftest() {
+  [ -f kernels/common/Makefile ] || return 0
+  echo "==> kernels/common (harness self-test)"
+  make -C kernels/common test "${make_args[@]}"
+}
+
 case "${target}" in
   kernels|all)
+    run_common_harness_selftest
     run_kernel_tree "kernels"
     ;;
   tests)

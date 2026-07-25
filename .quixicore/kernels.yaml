@@ -648,7 +648,64 @@ operations:
         status: implemented
         path: kernels/norms/rms_residual_next/variants/rocm_cdna3
 
+  cross_attention:
+    family: attention
+    status: implemented
+    path: kernels/attention/cross_attention
+    notes: >-
+      Cross-attention with independent query/key lengths, ported from the CPU
+      reference quixicore_cpu::cross_attention. Preserves the full contract:
+      per-batch valid key count (clamped, not assumed), optional additive score
+      bias, optional score softcap, explicit-or-automatic scale, GQA head
+      grouping, D in {64,128,256}, and an all-zero row when a batch item has no
+      valid keys. Bias is added to the SCALED score and the softcap is applied
+      after the bias -- both orderings are contractual. MFMA-tiled flash
+      attention, BQ=BK=16, one wave64 per query block, K/V tile reused across 16
+      queries, v_mfma_f32_16x16x16{bf16_1k,f16} for QK^T and P@V, softmax over an
+      LDS transpose of S. Unlike the self-attention kernel, Lq and Lk need not be
+      multiples of 16: partial query/key tiles are masked, and the first-tile
+      running max is special-cased so exp(-inf - -inf) cannot emit NaN on ragged
+      input. bf16 and fp16 storage; fp32 storage deliberately not ported (no
+      caller, and it would need an MFMA-free path). Forward only. 50/50 PASS vs
+      fp64 oracle (rel ~2.2e-3 bf16 / ~2.6e-4 fp16, cosine >0.999997); 2.43x
+      (ragged) to 9.31x (D=64 prefill) over a wavefront-per-query baseline,
+      30-44 TFLOP/s on MI300X.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/attention/cross_attention/variants/rocm_cdna3
+
+  biased_attention:
+    family: attention
+    status: implemented
+    path: kernels/attention/biased_attention
+    notes: >-
+      Additive per-head score bias plus an optional boolean key mask, ported from
+      the CPU reference quixicore_cpu::biased_attention. Layout [Hq,Lq,D] with no
+      batch dimension. Two contract details differ from cross_attention and are
+      pinned by tests: the bias is indexed PER HEAD while the mask is a single
+      [Lq,Lk] plane SHARED across heads, and automatic scale triggers on
+      scale == 0 (not scale > 0), so a negative explicit scale is legal and
+      honoured. A masked key is skipped rather than driven to -inf, so it never
+      enters the running max; a tile with no live keys is special-cased because
+      exp(-inf - -inf) is NaN. MFMA-tiled flash attention, BQ=BK=16, one wave64
+      per (query block, head), shared fragment layout from
+      kernels/common/cdna3_mfma.cuh. Includes a masked-tile skip: the wavefront
+      OR-reduces the 16x16 mask tile and skips the K/V load plus MFMAs when
+      nothing is live -- without it a +-8 banded mask measured 0.70x, an outright
+      regression against a baseline that skips masked keys; with it the same
+      shape is 3.62x at 87.7 TFLOP/s. bf16 and fp16 storage; D 32/64/128/256
+      (32 is the Swin head dim). Forward only; fp32 storage not ported. 50/50
+      PASS vs fp64 oracle (rel ~2.1e-3 bf16 / ~2.5e-4 fp16, cosine >0.999997, at
+      the one-storage-ULP elementwise bound); 2.90x-5.10x over the
+      wavefront-per-query baseline on MI300X.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/attention/biased_attention/variants/rocm_cdna3
+
 notes:
   - Normal build and test discovery must filter by `variants/rocm_<target>` and skip archive directories.
   - Upstream architecture branches are import sources only; supported target variants live side by side in main.
   - CUDA-to-CDNA3 parity status is tracked in `docs/cuda-to-cdna3-port-status.md`.
+  - Metal/CPU parity status is tracked in `docs/metal-cpu-parity-gaps.md`.

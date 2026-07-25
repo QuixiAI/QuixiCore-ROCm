@@ -52,3 +52,6 @@ kernels/matmul/bf16fp32/variants/rocm_udna1/gfx1250/*.out
 *~
 
 !CMakeLists.txt
+
+# Standalone kernel-harness binaries (kernels/**/variants/**, kernels/common)
+*.out

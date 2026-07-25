@@ -14,6 +14,25 @@ measurement-driven, and recorded in the performance notebook.
   `docs/profiling/`.
 - Kernel metadata: `.quixicore/kernels.yaml` and
   `.quixicore/quant-formats.yaml`.
+- Parity work list: `docs/metal-cpu-parity-gaps.md` (Metal/CPU gap, in progress)
+  and `docs/cuda-to-cdna3-port-status.md` (CUDA port, complete).
+
+## Kernel Harness
+
+New kernel ports use the shared harness `kernels/common/cdna3_harness.cuh`
+rather than re-implementing the oracle/timing pattern: it supplies fp64-oracle
+comparison at `../registry/tolerances.yaml` tolerances, a deterministic host
+RNG, wave64 reductions, and timing with median/min/max plus GB/s and TFLOP/s.
+`perf/harness/run_kernel_bench.sh <kernel-dir>` runs a harness, archives raw
+output with GPU/ROCm/HIP/commit provenance, and emits a pre-filled notebook
+entry. Follow the layout of `kernels/pooling/pool_mean_rms_l2/variants/rocm_cdna3`:
+a self-contained `<op>.cu` with an embedded oracle and `--bench` mode, a
+Makefile with `all`/`test`/`bench`/`clean`, and a `README.cdna3.md` recording
+the math, the source ported from, the CDNA3 approach, and explicit non-ports.
+
+Harnesses must be torch-free standalone binaries: kernel objects link system
+ROCm 7.2 and conflict with the torch wheel's ROCm 6.4 HSA symbols when
+co-loaded.
 
 ## Performance Optimization Requirement
 

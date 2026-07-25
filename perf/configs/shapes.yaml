@@ -1,0 +1,185 @@
+# Shape sets for CDNA3 (gfx942) kernel benchmarks.
+#
+# The first block mirrors ../../../registry/benchmark-shapes.yaml verbatim so
+# ROCm measures the same shapes as the Metal, CPU, and CUDA backends and the
+# numbers stay comparable across the umbrella. The `rocm_families` block below
+# adds the per-family shape sets the shared registry does not cover, for the
+# families being brought to Metal/CPU parity.
+#
+# Rules that make results comparable:
+#   - Always measure at least one decode shape and one prefill shape. A kernel
+#     that wins at prefill and regresses at decode has not won.
+#   - Include one ragged/non-power-of-two shape per family. Tail handling is
+#     where wavefront-widening optimizations regress.
+#   - MI300X has 304 CUs; a grid below ~304 workgroups measures launch overhead
+#     and occupancy, not the kernel. Note when a shape is deliberately small.
+
+schema_version: 0.1
+backend: rocm
+arch: gfx942
+
+# --- mirrored from registry/benchmark-shapes.yaml --------------------------
+benchmark_shapes:
+  decode_small:
+    description: Small-batch decode path for interactive inference.
+    batch: [1, 2, 4]
+    sequence: [1]
+    hidden: [2048, 4096]
+  decode_large:
+    description: Larger-batch decode path for server inference.
+    batch: [8, 16, 32]
+    sequence: [1]
+    hidden: [4096, 8192]
+  prefill:
+    description: Prefill path for prompt processing.
+    batch: [1, 4, 8]
+    sequence: [512, 2048, 8192]
+    hidden: [4096, 8192]
+  quant_matmul:
+    description: Quantized matrix/vector and matrix/matrix coverage.
+    m: [1, 16, 128]
+    n: [4096, 8192, 16384]
+    k: [4096, 8192, 16384]
+  moe:
+    description: Mixture-of-experts routing and grouped GEMM coverage.
+    tokens: [128, 1024, 4096]
+    experts: [8, 16, 64]
+    top_k: [1, 2, 4]
+
+# --- ROCm per-family additions --------------------------------------------
+rocm_families:
+
+  attention:
+    description: >-
+      Dense/GQA/cross/windowed attention forward and backward. Head dims track
+      the landed MFMA flash kernel (BQ=16 query block per wavefront).
+    batch: [1, 4, 16]
+    heads_q: [32, 64]
+    heads_kv: [8, 32]          # GQA ratio 4:1 and MHA
+    seq_q: [1, 512, 4096]      # decode, mid prefill, long prefill
+    seq_kv: [128, 4096, 16384] # cross-attention decouples kv length from q
+    head_dim: [64, 128, 256]
+    ragged_case: {batch: 7, seq_q: 517, seq_kv: 1031}
+    dtypes: [bf16, fp16]
+
+  kv_cache:
+    description: >-
+      Paged cache scatter/gather and quantized-codec decode attention. Block
+      size 16 is the vLLM-style default; 32 exercises a full wavefront per block.
+    batch: [1, 8, 64, 256]
+    block_size: [16, 32]
+    blocks_per_seq: [8, 64, 512]
+    heads_kv: [8, 32]
+    head_dim: [64, 128]
+    group_size: [32, 64, 128]  # quantized codec group sizes
+    formats: [q8_0, mxfp8, bitnet_kv3, turboquant, fp8_e4m3, fp8_e5m2]
+    ragged_case: {batch: 13, blocks_per_seq: 37}
+
+  quantization:
+    description: >-
+      Dequant, GEMV, GEMM, and packing across the canonical format surface.
+      Extends registry quant_matmul with BaseQ bit widths and group sizes.
+    m: [1, 16, 128, 2048]
+    n: [4096, 8192, 16384]
+    k: [4096, 8192, 16384]
+    group_size: [32, 64, 128]
+    base_q_bits: [2, 3, 4, 5, 6, 8]
+    scale_storage: [bf16, f16, e8m0, e4m3]
+    ragged_case: {m: 7, n: 4099, k: 4097}
+
+  norms_elementwise:
+    description: >-
+      Row-wise norms and the generic elementwise/tensor-op surface. Row lengths
+      straddle the 64-lane wavefront so tail handling is always measured.
+    rows: [1024, 16384, 262144]
+    cols: [768, 2048, 4096, 8192]
+    ragged_case: {rows: 4097, cols: 501}
+    dtypes: [fp32, fp16, bf16]
+
+  linear_attention:
+    description: Linear-attention and recurrent (GDN, RWKV) state kernels.
+    batch: [1, 8, 32]
+    heads: [8, 32]
+    seq: [512, 4096, 16384]
+    head_dim: [64, 128]
+    feature_dim: [16, 64, 256]  # Based/Hedgehog feature expansion
+    chunk: [64, 128]
+    ragged_case: {batch: 5, seq: 1023}
+
+  ssm:
+    description: Selective scan, Mamba2/SSD forward and backward.
+    batch: [1, 8, 32]
+    seq: [512, 4096, 16384]
+    d_model: [2048, 4096]
+    d_state: [16, 64, 128]
+    chunk: [64, 256]
+    ragged_case: {batch: 3, seq: 1027}
+
+  conv:
+    description: >-
+      2-D/3-D convolution, depthwise, transposed, im2col/col2im, pooling.
+      Both a small-spatial/large-channel and a large-spatial/small-channel
+      shape, because the im2col-vs-direct crossover moves between them.
+    batch: [1, 8, 32]
+    channels_in: [3, 64, 256, 1024]
+    channels_out: [64, 256, 1024]
+    spatial_2d: [[224, 224], [64, 64], [14, 14]]
+    spatial_3d: [[16, 56, 56], [8, 28, 28]]
+    kernel: [1, 3, 5, 7]
+    stride: [1, 2]
+    dilation: [1, 2]
+    ragged_case: {batch: 3, channels_in: 37, spatial_2d: [67, 53], kernel: 3}
+
+  audio:
+    description: >-
+      NWC audio convolution and learned relative attention. Layout is [B,T,C]
+      with [O,K,C] or [C,K] weights; symmetric vs causal geometry is explicit.
+    batch: [1, 8, 32]
+    time: [512, 4096, 30000]     # 30k ~ 30 s at 1 kHz feature rate
+    channels: [128, 512, 1024]
+    kernel: [3, 15, 31]
+    chunk: [64, 128]             # relative-attention chunk geometry
+    left_context: [0, 64, 128]
+    right_context: [0, 8, 64]
+    ragged_case: {batch: 5, time: 4099, channels: 257}
+
+  vision:
+    description: >-
+      Patch extraction, projection, position encoding, and token pooling.
+      Patch counts chosen so some shapes leave a partial final window.
+    batch: [1, 8, 32]
+    image_2d: [[224, 224], [336, 336], [448, 448]]
+    image_3d: [[8, 224, 224]]
+    patch: [14, 16]
+    temporal_patch: [1, 2]
+    channels: [3]
+    embed_dim: [768, 1024, 1152, 1536]
+    window: [7, 8]
+    ragged_case: {batch: 3, image_2d: [225, 337], patch: 14}
+
+  moe_extended:
+    description: MoE backward and packed grouped paths beyond the registry set.
+    tokens: [128, 1024, 4096, 16384]
+    experts: [8, 16, 64, 128]
+    top_k: [1, 2, 4, 8]
+    hidden: [4096, 8192]
+    intermediate: [14336]
+    ragged_case: {tokens: 1023, experts: 7, top_k: 3}
+
+  sampling:
+    description: Logit processing, sampling transforms, beam and speculative.
+    batch: [1, 8, 64, 256]
+    vocab: [32000, 128256, 262144]
+    top_k: [1, 20, 50, 100]
+    beam_width: [1, 4, 8]
+    draft_len: [1, 4, 8]
+    ragged_case: {batch: 13, vocab: 32003}
+
+# Default timing parameters. Kernels with high per-launch variance should raise
+# `iterations` and say so in the notebook entry rather than reporting a noisy
+# median as a win.
+timing:
+  warmups: 10
+  iterations: 50
+  statistic: median
+  report: [median_ms, min_ms, max_ms, spread]
