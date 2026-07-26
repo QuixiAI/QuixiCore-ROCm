@@ -55,7 +55,7 @@ families:
     paths:
       - kernels/serving
   optimizers:
-    status: planned
+    status: partial
     paths:
       - kernels/optimizers
   collectives:
@@ -148,6 +148,122 @@ operations:
       - name: rocm_cdna3
         status: imported
         path: kernels/activations/elementwise/variants/rocm_cdna3
+
+  kd_kl_dense_fwd:
+    family: utils
+    status: implemented
+    path: kernels/activations/phase10_training
+    notes: >-
+      Phase 10 dense knowledge-distillation KL forward route with per-row
+      student/teacher logsumexp outputs and temperature-scaled loss.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/activations/phase10_training/variants/rocm_cdna3
+
+  kd_kl_dense_bwd:
+    family: utils
+    status: implemented
+    path: kernels/activations/phase10_training
+    notes: >-
+      Phase 10 dense KL distillation backward route, computing student-logit
+      gradients from dense teacher and student probabilities.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/activations/phase10_training/variants/rocm_cdna3
+
+  kd_kl_topk_fwd:
+    family: utils
+    status: implemented
+    path: kernels/activations/phase10_training
+    notes: >-
+      Phase 10 top-k KL distillation forward route over sparse teacher logits
+      and indices with dense student logsumexp.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/activations/phase10_training/variants/rocm_cdna3
+
+  kd_kl_topk_bwd:
+    family: utils
+    status: implemented
+    path: kernels/activations/phase10_training
+    notes: >-
+      Phase 10 top-k KL distillation backward route. Each dense student
+      position scans top-k corrections, avoiding duplicate-index races.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/activations/phase10_training/variants/rocm_cdna3
+
+  kd_ce_fused_fwd:
+    family: utils
+    status: implemented
+    path: kernels/activations/phase10_training
+    notes: >-
+      Phase 10 fused cross-entropy plus dense KL distillation forward route,
+      returning CE, KD, raw student LSE, temperature student LSE, and teacher
+      LSE.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/activations/phase10_training/variants/rocm_cdna3
+
+  kd_ce_fused_bwd:
+    family: utils
+    status: implemented
+    path: kernels/activations/phase10_training
+    notes: >-
+      Phase 10 fused CE+KD backward route with dense teacher probabilities and
+      ignore-index handling.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/activations/phase10_training/variants/rocm_cdna3
+
+  adamw_masked:
+    family: optimizers
+    status: implemented
+    path: kernels/activations/phase10_training
+    notes: >-
+      Phase 10 masked AdamW route matching both CPU mask modes: mode 0 skips
+      inactive segments, while mode 1 updates moments and parameters without
+      decoupled weight decay for inactive segments.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/activations/phase10_training/variants/rocm_cdna3
+
+  sgd:
+    family: optimizers
+    status: implemented
+    path: kernels/activations/phase10_training
+    notes: Phase 10 SGD parameter update route from the CPU tensor-op contract.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/activations/phase10_training/variants/rocm_cdna3
+
+  softmax_backward:
+    family: activations
+    status: implemented
+    path: kernels/activations/phase10_training
+    notes: Phase 10 softmax backward route over row-major probability and grad rows.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/activations/phase10_training/variants/rocm_cdna3
+
+  silu_backward:
+    family: activations
+    status: implemented
+    path: kernels/activations/phase10_training
+    notes: Phase 10 SiLU backward elementwise route.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/activations/phase10_training/variants/rocm_cdna3
 
   qgemv:
     family: quantization

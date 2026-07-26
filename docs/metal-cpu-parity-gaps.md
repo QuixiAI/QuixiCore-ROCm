@@ -50,11 +50,11 @@ the kernel; a missing entry does not.
 | 7 | Sampling & embedding stragglers | 6 | 0 | 0 | **6** |
 | 8 | Linear attention | 9 | 0 | 0 | **9** |
 | 9 | State-space & hyper-connections | 6 | 0 | 0 | **6** |
-| 10 | Training & distillation | 10 | 10 | 0 | 0 |
+| 10 | Training & distillation | 10 | 0 | 0 | **10** |
 | 11 | Elementwise & tensor-op surface | 42 | 42 | 0 | 0 |
 | 12 | Convolution & audio | 16 | 16 | 0 | 0 |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **98** | **0** | **80** |
+| | **Total** | **178** | **83** | **0** | **95** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -349,23 +349,28 @@ row. Raw benchmark output is archived under
 
 ## Phase 10 — Training And Distillation (10)
 
-Lands in `kernels/activations/elementwise/variants/rocm_cdna3/tm_elementwise_kernels.cuh`
-alongside the existing `cross_entropy_*`, `dropout_*`, and `adamw_step`. Apply
-the proven 64-lane wavefront widening from the outset rather than porting narrow
-and re-widening.
+Landed in `kernels/activations/phase10_training/variants/rocm_cdna3`. The KD
+reductions use one row block, while backward, optimizer, SGD, softmax-backward,
+and SiLU-backward use direct elementwise routes.
+
+2026-07-26 update: the Phase 10 harness reports `ALL PASS` for 22 checks
+covering dense/top-k KL distillation forward and backward, fused CE+KD forward
+and backward, both `adamw_masked` modes, SGD, softmax backward, and SiLU
+backward. Raw benchmark output is archived under
+`perf/results/2026-07-26/phase10-training-final2/`.
 
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `kd_kl_dense_fwd` | `utils/kd_ref.cpp` | `utils/kd_kl_dense` | planned |
-| `kd_kl_dense_bwd` | `utils/kd_ref.cpp` | `utils/kd_kl_dense` | planned |
-| `kd_kl_topk_fwd` | `utils/kd_ref.cpp` | `utils/kd_kl_topk` | planned |
-| `kd_kl_topk_bwd` | `utils/kd_ref.cpp` | `utils/kd_kl_topk` | planned |
-| `kd_ce_fused_fwd` | `utils/kd_ref.cpp` | `utils/kd_kl_dense` | planned |
-| `kd_ce_fused_bwd` | `utils/kd_ref.cpp` | `utils/kd_kl_dense` | planned |
-| `adamw_masked` | `optimizers/adamw_ref.cpp` | `optimizers/optim` | planned |
-| `sgd` | `utils/tensor_ops_ref.cpp` | `optimizers/optim` | planned |
-| `softmax_backward` | `utils/tensor_ops_ref.cpp` | `activations/softmax` | planned |
-| `silu_backward` | `activations/activations_ref.cpp` | `activations/glu` | planned |
+| `kd_kl_dense_fwd` | `utils/kd_ref.cpp` | `utils/kd_kl_dense` | **landed** |
+| `kd_kl_dense_bwd` | `utils/kd_ref.cpp` | `utils/kd_kl_dense` | **landed** |
+| `kd_kl_topk_fwd` | `utils/kd_ref.cpp` | `utils/kd_kl_topk` | **landed** |
+| `kd_kl_topk_bwd` | `utils/kd_ref.cpp` | `utils/kd_kl_topk` | **landed** |
+| `kd_ce_fused_fwd` | `utils/kd_ref.cpp` | `utils/kd_kl_dense` | **landed** |
+| `kd_ce_fused_bwd` | `utils/kd_ref.cpp` | `utils/kd_kl_dense` | **landed** |
+| `adamw_masked` | `optimizers/adamw_ref.cpp` | `optimizers/optim` | **landed** |
+| `sgd` | `utils/tensor_ops_ref.cpp` | `optimizers/optim` | **landed** |
+| `softmax_backward` | `utils/tensor_ops_ref.cpp` | `activations/softmax` | **landed** |
+| `silu_backward` | `activations/activations_ref.cpp` | `activations/glu` | **landed** |
 
 ## Phase 11 — Elementwise And Tensor-Op Surface (42)
 

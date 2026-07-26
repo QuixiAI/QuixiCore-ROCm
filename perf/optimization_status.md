@@ -2471,3 +2471,51 @@ state update to wave64, and the DSV4 stages are straightforward token or
 elementwise parallel ports.
 
 Raw results: `perf/results/2026-07-26/phase9-ssm-final3/bench.txt`.
+
+## 2026-07-26: Training And Distillation Phase 10 - LANDED
+
+Status: landed.
+
+Current implementation: `kernels/activations/phase10_training/variants/rocm_cdna3`.
+Current public route: Phase 10 operation entries in `.quixicore/kernels.yaml`:
+`kd_kl_dense_fwd`, `kd_kl_dense_bwd`, `kd_kl_topk_fwd`, `kd_kl_topk_bwd`,
+`kd_ce_fused_fwd`, `kd_ce_fused_bwd`, `adamw_masked`, `sgd`,
+`softmax_backward`, and `silu_backward`.
+
+References inspected: CPU `utils/kd_ref.cpp`, `utils/tensor_ops_ref.cpp`,
+`activations/activations_ref.cpp`, and `optimizers/adamw_ref.cpp`; Metal
+`utils/kd_kl_dense/kd_kl_dense.metal`, `utils/kd_kl_topk/kd_kl_topk.metal`,
+`optimizers/optim/adamw.metal`, `activations/softmax/softmax.metal`, and
+`activations/glu/glu.metal`.
+
+Correctness: `make -C kernels/activations/phase10_training/variants/rocm_cdna3 test`
+and archived `bench` both report `ALL PASS`. The harness has 22 checks covering
+dense/top-k KL distillation forward and backward, fused CE+KD forward and
+backward, both `adamw_masked` modes, SGD, softmax backward, and SiLU backward.
+
+Baseline and experiments on MI300X gfx942, ROCm 7.2.4, HIP 7.2.53211,
+bare metal, command
+`HIP_VISIBLE_DEVICES=0 make -C kernels/activations/phase10_training/variants/rocm_cdna3 bench`.
+Benchmarks used printed warmups/iterations; fast kernels use repeated launches
+per timing sample and report per-launch medians.
+
+| route / shape | baseline | candidate/current | decision |
+| --- | ---: | ---: | --- |
+| `kd_kl_dense_fwd`, fp32 rows=512,vocab=8192 | scalar 1.0947 ms, 15.3 GB/s | row-block 0.0112 ms, 1504.4 GB/s, 98.09x | keep row-block route |
+| `kd_kl_dense_bwd`, fp32 rows=512,vocab=8192 | scalar 0.6058 ms, 41.6 GB/s | elementwise 0.0098 ms, 2565.3 GB/s, 61.72x | keep elementwise route |
+| `kd_kl_topk_fwd`, fp32 rows=512,vocab=8192,k=16 | scalar 1.1512 ms, 29.4 GB/s | row-block 0.0189 ms, 1790.4 GB/s, 60.92x | keep row-block route |
+| `kd_kl_topk_bwd`, fp32 rows=512,vocab=8192,k=16 | scalar 7.3545 ms, 9.2 GB/s | dense scan 0.0572 ms, 1179.4 GB/s, 128.47x | keep dense scan route |
+| `kd_ce_fused_fwd`, fp32 rows=512,vocab=8192 | scalar 1.3308 ms, 12.6 GB/s | row-block 0.0140 ms, 1197.1 GB/s, 94.82x | keep row-block route |
+| `kd_ce_fused_bwd`, fp32 rows=512,vocab=8192 | scalar 1.1270 ms, 22.4 GB/s | elementwise 0.0127 ms, 1976.9 GB/s, 88.44x | keep elementwise route |
+| `adamw_masked`, fp32 n=16777216 | scalar 1.2025 ms, 111.7 GB/s | elementwise 0.0876 ms, 1534.1 GB/s, 13.73x | keep elementwise route |
+| `sgd`, fp32 n=16777216 | scalar 0.6504 ms, 309.5 GB/s | elementwise 0.0673 ms, 2993.4 GB/s, 9.67x | keep elementwise route |
+| `softmax_backward`, fp32 rows=32768,cols=256 | scalar 0.3370 ms, 298.7 GB/s | row-block 0.0377 ms, 2668.0 GB/s, 8.93x | keep row-block route |
+| `silu_backward`, fp32 n=16777216 | scalar 1.2042 ms, 167.2 GB/s | elementwise 0.0530 ms, 3801.8 GB/s, 22.74x | keep elementwise route |
+
+Decision: KEEP the Phase 10 ports. The KD reductions use one CDNA3 row block
+for the softmax/logsumexp work, while backward, optimizer, SGD, and SiLU routes
+map directly to independent elementwise updates. `kd_kl_topk_bwd` deliberately
+scans the sparse teacher corrections from each dense student element so
+duplicate top-k indices cannot race.
+
+Raw results: `perf/results/2026-07-26/phase10-training-final2/bench.txt`.
