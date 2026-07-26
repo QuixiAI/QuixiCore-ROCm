@@ -2657,3 +2657,50 @@ intentionally scans from each output bucket to avoid unordered accumulation
 races.
 
 Raw results: `perf/results/2026-07-26/phase13-vision-final2/bench.txt`.
+
+## 2026-07-26: Quantized Decode Phase 2 Close-Out - LANDED
+
+Status: landed.
+
+Current implementation: `kernels/serving/phase2_quant_decode/variants/rocm_cdna3`.
+Current public route: Phase 2 operation entries in `.quixicore/kernels.yaml`:
+`kv_cache_scatter_bitnet_kv3`, `kv_cache_gather_bitnet_kv3`,
+`paged_attention_bitnet_kv3`, `paged_attention_turboquant`,
+`paged_attention_advanced`, and `quantized_attention`.
+
+References inspected: CPU `attention/attention_bitnet_kv3.cpp`,
+`attention/attention_turboquant.cpp`, `attention/attention_serving_ref.cpp`,
+existing ROCm `kernels/serving/kv_cache_q8_0/variants/rocm_cdna3`, and
+existing ROCm `kernels/serving/kv_cache_mxfp8/variants/rocm_cdna3`.
+
+Correctness: `make -C kernels/serving/phase2_quant_decode/variants/rocm_cdna3 test`
+and archived `bench` both report `ALL PASS`. The harness has 24 checks covering
+BitNet-KV3 scatter/gather/decode over signed-FP16 and
+unsigned-zero-point-FP32 metadata, TurboQuant paged decode, advanced paged
+attention with masks/ALiBI/sinks/softcap, and `quantized_attention` over
+`q8_0` and `q4_0` in full and causal modes.
+
+Baseline and experiments on MI300X gfx942, ROCm 7.2.4, HIP 7.2.53211,
+bare metal, no torch/framework linkage, command
+`HIP_VISIBLE_DEVICES=0 make -C kernels/serving/phase2_quant_decode/variants/rocm_cdna3 bench`.
+Benchmarks used printed warmups/iterations; fast kernels use repeated launches
+per timing sample and report per-launch medians.
+
+| route / shape | baseline | candidate/current | decision |
+| --- | ---: | ---: | --- |
+| `kv_cache_scatter_bitnet_kv3`, fp32 count=96,max_slots=1024,heads=4,D=64,group=32,unsigned+zero | scalar 55.0926 ms, min 55.0276 max 55.6548 | destination-owned row route 0.0590 ms, 7.8 GB/s, min 0.0585 max 0.0596, 933.83x | keep row route |
+| `kv_cache_gather_bitnet_kv3`, fp32 count=96,heads=4,D=64,group=32,unsigned+zero | scalar 19.0524 ms, min 18.9403 max 19.0988 | elementwise dequant route 0.0062 ms, 31.6 GB/s, min 0.0060 max 0.0063, 3057.83x | keep elementwise route |
+| `paged_attention_bitnet_kv3`, fp32 batch=4,qh=8,kvh=4,D=64,page=16,window=64 | scalar 70.0567 ms, min 69.5130 max 70.1854 | head-row route 2.3552 ms, min 2.3315 max 2.3717, 29.74x | keep head-row route |
+| `paged_attention_advanced`, fp32 batch=4,qh=8,kvh=4,D=64,page=16,window=64,mask+alibi+sinks+softcap | scalar 26.3478 ms, min 26.0881 max 26.7167 | head-row route 1.2870 ms, min 1.2623 max 1.3159, 20.47x | keep head-row route |
+| `paged_attention_turboquant`, fp32 batch=4,qh=8,kvh=4,D=64,page=16,window=64,k4/v3 | scalar 51.4673 ms, min 51.4145 max 52.5140 | head-row route 1.7024 ms, min 1.6454 max 1.7348, 30.23x | keep head-row route |
+| `quantized_attention`, q8_0 fp32 batch=2,heads=4,seq=64,D=64,causal | scalar 576.1134 ms, min 574.2322 max 586.6661 | query-row route 3.3118 ms, min 3.2744 max 3.3541, 173.96x | keep query-row route |
+
+Decision: KEEP the Phase 2 close-out ports. The BitNet scatter route is
+destination-owned so duplicate slot updates resolve in CPU token order, while
+the gather and attention routes keep the canonical low-bit-first and
+per-group metadata interpretation. TurboQuant keeps V in the rotated FWHT
+domain until the final inverse transform. The advanced and quantized attention
+routes are correctness-first direct ports; broader GGUF dispatch and MFMA
+prefill specialization remain follow-up optimization work.
+
+Raw results: `perf/results/2026-07-26/phase2-quant-decode-final3/bench.txt`.

@@ -42,7 +42,7 @@ the kernel; a missing entry does not.
 | --- | --- | ---: | ---: | ---: | ---: |
 | 0 | Harness infrastructure | — | — | — | done |
 | 1 | Attention & RoPE variants | 13 | 0 | 0 | **13** |
-| 2 | Quantized KV-cache codecs | 17 | 6 | 0 | 11 |
+| 2 | Quantized KV-cache codecs | 17 | 0 | 0 | **17** |
 | 3 | Dense matmul epilogues | 10 | 0 | 0 | **10** |
 | 4 | MoE completeness | 7 | 0 | 0 | **7** |
 | 5 | BaseQ canonical family | 9 | 0 | 0 | **9** |
@@ -54,7 +54,7 @@ the kernel; a missing entry does not.
 | 11 | Elementwise & tensor-op surface | 42 | 0 | 0 | **42** |
 | 12 | Convolution & audio | 16 | 0 | 0 | **16** |
 | 13 | Vision | 19 | 0 | 0 | **19** |
-| | **Total** | **178** | **6** | **0** | **172** |
+| | **Total** | **178** | **0** | **0** | **178** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -101,7 +101,16 @@ domain until one final inverse transform and canonical K **not** transformed;
 BitNet-KV3 keeps low-bit-first ordering with explicit signedness, zero-point
 mode, group size, and FP16/FP32 scale encoding.
 
-### Reconnaissance for the remaining 13 (read this before starting)
+2026-07-26 update: `kernels/serving/phase2_quant_decode/variants/rocm_cdna3`
+landed the six remaining Phase 2 rows. The standalone harness reports
+`ALL PASS` for 24 checks covering BitNet-KV3 scatter/gather/decode over
+signed-FP16 and unsigned-zero-point-FP32 metadata, TurboQuant paged decode,
+advanced paged attention with masks/ALiBI/sinks/softcap, and `quantized_attention`
+over `q8_0` and `q4_0` in full and causal modes. The focused benchmark keeps
+the direct row/element routes over scalar GPU baselines, with raw output
+archived under `perf/results/2026-07-26/phase2-quant-decode-final3/`.
+
+### Reconnaissance notes from the Phase 2 close-out
 
 **MXFP8** (`attention_mxfp8.cpp`). Unlike Q8_0's two planes, MXFP8 is a single
 **interleaved 33-byte block**: `[e8m0 scale byte][32 × e4m3 code bytes]`, indexed
@@ -138,15 +147,15 @@ K is **not** transformed. `turboquant_query_transform` is the query-side half.
 | `kv_cache_scatter_mxfp8` | `attention/attention_mxfp8.cpp` | — | **landed** |
 | `kv_cache_gather_mxfp8` | `attention/attention_mxfp8.cpp` | — | **landed** |
 | `paged_attention_mxfp8` | `attention/attention_mxfp8.cpp` | — | **landed** |
-| `kv_cache_scatter_bitnet_kv3` | `serving/serving_quant_ref.cpp` | — | planned |
-| `kv_cache_gather_bitnet_kv3` | `serving/serving_quant_ref.cpp` | — | planned |
-| `paged_attention_bitnet_kv3` | `attention/attention_bitnet_kv3.cpp` | — | planned |
-| `paged_attention_turboquant` | `attention/attention_turboquant.cpp` | — | planned |
+| `kv_cache_scatter_bitnet_kv3` | `attention/attention_bitnet_kv3.cpp` | — | **landed** |
+| `kv_cache_gather_bitnet_kv3` | `attention/attention_bitnet_kv3.cpp` | — | **landed** |
+| `paged_attention_bitnet_kv3` | `attention/attention_bitnet_kv3.cpp` | — | **landed** |
+| `paged_attention_turboquant` | `attention/attention_turboquant.cpp` | — | **landed** |
 | `turboquant_query_transform` | `attention/attention_turboquant.cpp` | — | **landed** |
-| `paged_attention_advanced` | `serving/serving_extended_ref.cpp` | — | planned |
+| `paged_attention_advanced` | `attention/attention_serving_ref.cpp` | — | **landed** |
 | `quantized_mla_decode_absorbed` | `attention/mla_absorb_ref.cpp` | — | **landed** |
 | `quantized_mla_decode_absorbed_sparse` | `attention/mla_absorb_ref.cpp` | — | **landed** |
-| `quantized_attention` | `attention/attention_turboquant.cpp` | — | planned |
+| `quantized_attention` | `attention/attention_serving_ref.cpp` | — | **landed** |
 | `kv_cache_scale_update` | `serving/kv_cache_extended_ref.cpp` | `serving/kv_cache` | **landed** |
 
 ## Phase 3 — Dense Matmul Epilogues And Decode Path (10)

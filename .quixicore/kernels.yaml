@@ -2387,6 +2387,82 @@ operations:
         status: implemented
         path: kernels/serving/kv_cache_q8_0/variants/rocm_cdna3
 
+  kv_cache_scatter_bitnet_kv3:
+    family: serving
+    status: implemented
+    path: kernels/serving/phase2_quant_decode
+    notes: >-
+      Phase 2 BitNet-KV3 cache scatter port preserving low-bit-first 3-bit
+      packing, signed/unsigned codes, none/integer zero-point modes, FP16/FP32
+      scale storage, and CPU-order duplicate slot resolution.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/serving/phase2_quant_decode/variants/rocm_cdna3
+
+  kv_cache_gather_bitnet_kv3:
+    family: serving
+    status: implemented
+    path: kernels/serving/phase2_quant_decode
+    notes: >-
+      Phase 2 BitNet-KV3 cache gather/dequant route sharing the canonical
+      3-bit codec and scale/zero metadata interpretation with the scatter path.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/serving/phase2_quant_decode/variants/rocm_cdna3
+
+  paged_attention_bitnet_kv3:
+    family: serving
+    status: implemented
+    path: kernels/serving/phase2_quant_decode
+    notes: >-
+      Phase 2 BitNet-KV3 paged decode attention over canonical packed K/V cache
+      rows, GQA head mapping, tile-16 online softmax, sliding window, and
+      FP16/FP32 scale metadata.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/serving/phase2_quant_decode/variants/rocm_cdna3
+
+  paged_attention_turboquant:
+    family: serving
+    status: implemented
+    path: kernels/serving/phase2_quant_decode
+    notes: >-
+      Phase 2 TurboQuant paged decode attention preserving packed canonical K,
+      rotated V, per-32 scale metadata, centroid decode, and the final inverse
+      signed FWHT.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/serving/phase2_quant_decode/variants/rocm_cdna3
+
+  paged_attention_advanced:
+    family: serving
+    status: implemented
+    path: kernels/serving/phase2_quant_decode
+    notes: >-
+      Phase 2 advanced paged attention route with optional block masks, ALiBi
+      slopes, sink logits, softcap, sliding window, and GQA head mapping.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/serving/phase2_quant_decode/variants/rocm_cdna3
+
+  quantized_attention:
+    family: serving
+    status: implemented
+    path: kernels/serving/phase2_quant_decode
+    notes: >-
+      Phase 2 quantized prefill attention over GGUF q8_0 and q4_0 packed rows,
+      with full and causal modes. Broader GGUF format dispatch remains a
+      follow-up beyond this parity close-out.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/serving/phase2_quant_decode/variants/rocm_cdna3
+
 notes:
   - Normal build and test discovery must filter by `variants/rocm_<target>` and skip archive directories.
   - Upstream architecture branches are import sources only; supported target variants live side by side in main.

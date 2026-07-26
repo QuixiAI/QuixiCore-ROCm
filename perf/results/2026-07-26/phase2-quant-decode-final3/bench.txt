@@ -1,0 +1,66 @@
+# QuixiCore-ROCm kernel run
+kernel_dir:   kernels/serving/phase2_quant_decode/variants/rocm_cdna3
+label:        phase2-quant-decode-final3
+target:       bench
+command:      HIP_VISIBLE_DEVICES=0 make -C kernels/serving/phase2_quant_decode/variants/rocm_cdna3 bench
+timestamp:    2026-07-26T12:22:46+00:00
+git_commit:   8d34ca81 (working tree dirty)
+gpu:          AMD Instinct MI300X (gfx942), device index 0
+rocm:         7.2.4
+hip:          7.2.53211-97f5574fe2
+container:    bare metal (no container)
+host:         enc1-svr04
+---
+make: Entering directory '/home/hotaisle/QuixiCore/QuixiCore-ROCm/kernels/serving/phase2_quant_decode/variants/rocm_cdna3'
+HIP_VISIBLE_DEVICES=0 ./phase2_quant_decode.out --bench
+== phase2_quant_decode ==
+   GPU: AMD Instinct MI300X (gfx942:sramecc+:xnack-)  CUs: 304  LDS/block: 64 KB
+   HIP runtime: 70253211  driver: 70253211  device: 0 of many
+
+== Phase 2 remaining correctness ==
+  kv_cache_scatter_bitnet_kv3 signed-fp16 key          [exact] n=1152 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  kv_cache_scatter_bitnet_kv3 signed-fp16 value        [exact] n=1152 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  kv_cache_scatter_bitnet_kv3 signed-fp16 key scale    [exact] n=192 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  kv_cache_scatter_bitnet_kv3 signed-fp16 value scale  [exact] n=192 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  kv_cache_gather_bitnet_kv3 signed-fp16 key           [fp32] n=768 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  kv_cache_gather_bitnet_kv3 signed-fp16 value         [fp32] n=768 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  paged_attention_bitnet_kv3 signed-fp16               [quantized] n=512 bad=0 rel=4.619e-08 max=2.351e-07 cos=1.000000000  PASS
+  kv_cache_scatter_bitnet_kv3 unsigned-zp-fp32 key     [exact] n=1152 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  kv_cache_scatter_bitnet_kv3 unsigned-zp-fp32 value   [exact] n=1152 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  kv_cache_scatter_bitnet_kv3 unsigned-zp-fp32 key scale [exact] n=96 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  kv_cache_scatter_bitnet_kv3 unsigned-zp-fp32 value scale [exact] n=96 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  kv_cache_scatter_bitnet_kv3 unsigned-zp-fp32 key zero [exact] n=96 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  kv_cache_scatter_bitnet_kv3 unsigned-zp-fp32 value zero [exact] n=96 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  kv_cache_gather_bitnet_kv3 unsigned-zp-fp32 key      [fp32] n=768 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  kv_cache_gather_bitnet_kv3 unsigned-zp-fp32 value    [fp32] n=768 bad=0 rel=0.000e+00 max=0.000e+00 cos=1.000000000  PASS
+  paged_attention_bitnet_kv3 unsigned-zp-fp32          [quantized] n=512 bad=0 rel=4.730e-08 max=3.000e-07 cos=1.000000000  PASS
+  paged_attention_advanced mask/alibi/sink/softcap     [fp32] n=512 bad=0 rel=7.938e-08 max=4.614e-08 cos=1.000000000  PASS
+  paged_attention_turboquant k4/v3                     [quantized] n=512 bad=0 rel=1.659e-07 max=2.980e-08 cos=1.000000000  PASS
+  quantized_attention q8_0 full                        [quantized] n=2048 bad=0 rel=7.796e-08 max=4.123e-08 cos=1.000000000  PASS
+  quantized_attention q8_0 causal                      [quantized] n=2048 bad=0 rel=5.079e-08 max=8.351e-08 cos=1.000000000  PASS
+  quantized_attention q4_0 full                        [quantized] n=2048 bad=0 rel=7.546e-08 max=4.345e-08 cos=1.000000000  PASS
+  quantized_attention q4_0 causal                      [quantized] n=2048 bad=0 rel=4.994e-08 max=4.012e-08 cos=1.000000000  PASS
+Phase 2 remaining correctness checks: 24
+
+== Phase 2 remaining benchmarks ==
+   Timing note: row/direct CDNA3 routes compared with scalar GPU baselines.
+  kv_cache_scatter_bitnet_kv3 scalar        55.0926 ms       0.0 GB/s  (min 55.0276 max 55.6548 spread 1.01x, w2/i3)
+  kv_cache_scatter_bitnet_kv3 candidate      0.0590 ms       7.8 GB/s  (min 0.0585 max 0.0596 spread 1.02x, w5/i20)
+  kv_cache_scatter_bitnet_kv3              baseline 55.0926 ms -> candidate 0.0590 ms  = 933.83x (+93283.1%)
+  kv_cache_gather_bitnet_kv3 scalar         19.0524 ms       0.0 GB/s  (min 18.9403 max 19.0988 spread 1.01x, w2/i3)
+  kv_cache_gather_bitnet_kv3 candidate       0.0062 ms      31.6 GB/s  (min 0.0060 max 0.0063 spread 1.05x, w5/i20)
+  kv_cache_gather_bitnet_kv3               baseline 19.0524 ms -> candidate 0.0062 ms  = 3057.83x (+305682.6%)
+  paged_attention_bitnet_kv3 scalar         70.0567 ms       0.0 TFLOP/s  (min 69.5130 max 70.1854 spread 1.01x, w2/i3)
+  paged_attention_bitnet_kv3 candidate       2.3552 ms       0.0 TFLOP/s  (min 2.3315 max 2.3717 spread 1.02x, w5/i20)
+  paged_attention_bitnet_kv3               baseline 70.0567 ms -> candidate 2.3552 ms  = 29.74x (+2874.5%)
+  paged_attention_advanced scalar           26.3478 ms       0.0 TFLOP/s  (min 26.0881 max 26.7167 spread 1.02x, w2/i3)
+  paged_attention_advanced candidate         1.2870 ms       0.0 TFLOP/s  (min 1.2623 max 1.3159 spread 1.04x, w5/i20)
+  paged_attention_advanced                 baseline 26.3478 ms -> candidate 1.2870 ms  = 20.47x (+1947.1%)
+  paged_attention_turboquant scalar         51.4673 ms       0.0 TFLOP/s  (min 51.4145 max 52.5140 spread 1.02x, w2/i3)
+  paged_attention_turboquant candidate       1.7024 ms       0.0 TFLOP/s  (min 1.6454 max 1.7348 spread 1.05x, w5/i20)
+  paged_attention_turboquant               baseline 51.4673 ms -> candidate 1.7024 ms  = 30.23x (+2923.2%)
+  quantized_attention q8_0 scalar          576.1134 ms       0.0 TFLOP/s  (min 574.2322 max 586.6661 spread 1.02x, w2/i3)
+  quantized_attention q8_0 candidate         3.3118 ms       0.0 TFLOP/s  (min 3.2744 max 3.3541 spread 1.02x, w5/i20)
+  quantized_attention                      baseline 576.1134 ms -> candidate 3.3118 ms  = 173.96x (+17296.0%)
+ALL PASS
+make: Leaving directory '/home/hotaisle/QuixiCore/QuixiCore-ROCm/kernels/serving/phase2_quant_decode/variants/rocm_cdna3'
