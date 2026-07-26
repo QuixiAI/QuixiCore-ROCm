@@ -2033,3 +2033,48 @@ re-evaluating any format question — the ordering in this table could flip.
 
 Project decision (2026-07-26): stay on the antirez routed quant (q8_0
 attention + q2_K routed experts) for GLM-5.2 serving. No requantization.
+
+## 2026-07-26: MXFP8 paged KV-cache codec (Phase 2, 6/17) — LANDED
+
+Status: landed (correctness-first port; no speedup claimed).
+
+Current implementation: `kernels/serving/kv_cache_mxfp8/variants/rocm_cdna3`.
+`kv_cache_scatter_mxfp8` and `kv_cache_gather_mxfp8`, ported from
+`../QuixiCore-CPU/kernels/attention/attention_mxfp8.cpp` (:124, :224). Warp-group
+per (token, head) with lanes striding MX groups — the same schedule as the
+landed q8_0 codec.
+
+Layout differs from q8_0 and the difference is the whole risk: q8_0 keeps codes
+and scales in two separate planes, MXFP8 packs each 32-element group as one
+33-byte record (E8M0 scale byte, then 32 E4M3FN codes) in a single uint8 plane.
+Scatter is also incremental rather than a full rewrite — the q8_0 reference
+zero-fills the cache first, MXFP8 does not, and adding a zero-fill "for
+symmetry" would silently clear live pages.
+
+Correctness: `make test` -> ALL PASS (0 failures).
+  e8m0_encode_up vs hand-computed         PASS
+  e4m3fn_encode vs hand-computed          PASS
+  e4m3fn round-trips exact values         PASS
+  scatter (byte-exact vs host replica)    0 of 135168 bytes differ
+  scatter leaves unwritten slots untouched PASS
+  gather (exact decode)                   0 of 49152 values differ
+  round-trip within E4M3FN resolution     worst rel 5.882e-02
+
+That last number is the format's own grid (~6%), not a fitted tolerance.
+
+Harness note worth carrying to the remaining Phase 2 kernels: the byte-exact
+scatter check CANNOT catch a wrong spec. The host replica calls the same
+`__host__ __device__` helpers as the kernel, so mutating a shared helper moves
+both sides together and they still agree. Verified by mutation — flipping
+`e8m0_encode_up` from ceil to floor (the documented trap) left the byte-exact
+check PASSING and was caught only by the round-trip check. Added independent
+hand-computed primitive checks; the same mutation now fails immediately with
+`e8m0_encode_up(0.75) = 126, want 127`.
+
+Baseline: none. This is a functional port; no performance run and no speedup is
+claimed. Perf work on the KV codecs should follow the paged-attention kernels
+that consume them.
+
+Decision: KEEP. Open: `paged_attention_mxfp8` completes the mxfp8 group.
+
+Raw results: terminal output of `make test` in the variant directory.
