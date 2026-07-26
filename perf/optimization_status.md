@@ -2178,3 +2178,44 @@ checks in the codec harness, not this comparison.
 Baseline: none; functional port, no speedup claimed.
 
 Raw results: terminal output of `make test` in the variant directory.
+
+## 2026-07-26: quantized MLA absorbed decode, dense + sparse (Phase 2, 9/17) — LANDED
+
+Status: landed (correctness-first port; no speedup claimed).
+
+`kernels/serving/mla_absorbed/variants/rocm_cdna3`. This is the GLM-5.2 /
+DeepSeek-V3.2 decode shape: the cache holds only the low-rank latent plus a RoPE
+tail, kv_b is absorbed, and full K/V is never materialized. The sparse variant is
+the DSA path — `token_indices [batch, max_topk]` resolved through the same page
+table — which is exactly what GLM-5.2's indexer feeds.
+
+One 64-lane wavefront per (request, head); `wave_sum`'s xor reduction leaves the
+score in every lane so the online-softmax state stays in lockstep with no shared
+staging. `query_latent` and `mixed_latent` live in dynamic shared memory
+(2 * latent_dim floats = 4 KB at latent_dim 512).
+
+Two contract details reproduced rather than tidied: the softmax is PER-KEY (the
+sibling mxfp8 kernel tiles at 16), and its two branches are asymmetric — the
+new-maximum branch adds the latent with an implicit weight of exactly 1 rather
+than exp(0), and rescales in float while the denominator is double. Collapsing
+them into one general update changes the result.
+
+Correctness vs fp64 host replica, q8_0 packed kv_b, GLM-like geometry
+(latent 512, rope 64, nope 64, value 64, page 16):
+  quantized_mla_decode_absorbed          worst rel 1.470e-04, 0 non-finite
+  quantized_mla_decode_absorbed_sparse   worst rel 3.557e-05, 0 non-finite
+
+Not bit-exact by design: per-lane partials accumulate in double but the
+cross-lane reduction is float, where the reference is double throughout.
+
+Mutation-verified: collapsing the asymmetric branch (adding the latent with
+weight exp(0)*1.0001 instead of 1) fails at 1.215e-02 / 3.408e-02. The harness
+also counts non-finite outputs explicitly — `std::max(worst, nan)` returns
+`worst`, so without that an all-NaN result reports zero error and PASSES. That
+exact failure was hit for real on paged_attention_mxfp8 earlier today.
+
+Baseline: none; functional port, no speedup claimed. Only q8_0 is instantiated;
+the reference is generic over QuantFormat and the kernel is templated on FMT, so
+other formats are a instantiation away.
+
+Raw results: terminal output of `make test` in the variant directory.

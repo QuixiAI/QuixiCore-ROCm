@@ -42,7 +42,7 @@ the kernel; a missing entry does not.
 | --- | --- | ---: | ---: | ---: | ---: |
 | 0 | Harness infrastructure | — | — | — | done |
 | 1 | Attention & RoPE variants | 13 | 0 | 0 | **13** |
-| 2 | Quantized KV-cache codecs | 17 | 10 | 0 | 7 |
+| 2 | Quantized KV-cache codecs | 17 | 8 | 0 | 9 |
 | 3 | Dense matmul epilogues | 10 | 0 | 0 | **10** |
 | 4 | MoE completeness | 7 | 0 | 0 | **7** |
 | 5 | BaseQ canonical family | 9 | 0 | 0 | **9** |
@@ -144,8 +144,8 @@ K is **not** transformed. `turboquant_query_transform` is the query-side half.
 | `paged_attention_turboquant` | `attention/attention_turboquant.cpp` | — | planned |
 | `turboquant_query_transform` | `quantization/turboquant_ref.cpp` | — | planned |
 | `paged_attention_advanced` | `serving/serving_extended_ref.cpp` | — | planned |
-| `quantized_mla_decode_absorbed` | `attention/mla_absorb_ref.cpp` | — | planned |
-| `quantized_mla_decode_absorbed_sparse` | `attention/mla_absorb_ref.cpp` | — | planned |
+| `quantized_mla_decode_absorbed` | `attention/mla_absorb_ref.cpp` | — | **landed** |
+| `quantized_mla_decode_absorbed_sparse` | `attention/mla_absorb_ref.cpp` | — | **landed** |
 | `quantized_attention` | `attention/attention_turboquant.cpp` | — | planned |
 | `kv_cache_scale_update` | `serving/kv_cache_extended_ref.cpp` | `serving/kv_cache` | planned |
 
