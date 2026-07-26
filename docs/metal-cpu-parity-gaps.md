@@ -44,7 +44,7 @@ the kernel; a missing entry does not.
 | 1 | Attention & RoPE variants | 13 | 0 | 0 | **13** |
 | 2 | Quantized KV-cache codecs | 17 | 13 | 0 | 4 |
 | 3 | Dense matmul epilogues | 10 | 0 | 0 | **10** |
-| 4 | MoE completeness | 7 | 0 | 7 | 0 |
+| 4 | MoE completeness | 7 | 0 | 0 | **7** |
 | 5 | BaseQ canonical family | 9 | 9 | 0 | 0 |
 | 6 | Quant authoring & quantized embedding | 14 | 14 | 0 | 0 |
 | 7 | Sampling & embedding stragglers | 6 | 6 | 0 | 0 |
@@ -54,7 +54,7 @@ the kernel; a missing entry does not.
 | 11 | Elementwise & tensor-op surface | 42 | 42 | 0 | 0 |
 | 12 | Convolution & audio | 16 | 16 | 0 | 0 |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **144** | **7** | **27** |
+| | **Total** | **178** | **144** | **0** | **34** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -194,19 +194,19 @@ landed named fp8/nvfp4/wna16 grouped GEMMs.
 2026-07-26 update: recent MoE commits added all seven Phase 4 rows. The dense
 MoE harness reports `ALL PASS (0 failures)` for grouped routing and the four
 backward rows, and the quantized MoE harness reports `ALL PASS (0 failures)` for
-`moe_grouped_qgemm` and `moe_grouped_qswiglu` over `q2_K`. These are marked
-`active`; they still need a focused Phase 4 timing run before they can be marked
-`landed`.
+`moe_grouped_qgemm` and `moe_grouped_qswiglu` over `q2_K`. The same harnesses
+now carry focused scalar-vs-parallel Phase 4 timing runs, so the full phase is
+landed.
 
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `moe_route_grouped` | `moe/moe_ref.cpp` | `moe/moe` | active |
-| `moe_gather_backward` | `moe/moe_extended_ref.cpp` | — | active |
-| `moe_finalize_backward` | `moe/moe_extended_ref.cpp` | — | active |
-| `moe_grouped_gemm_backward_input` | `moe/moe_extended_ref.cpp` | — | active |
-| `moe_grouped_gemm_backward_weight` | `moe/moe_extended_ref.cpp` | — | active |
-| `moe_grouped_qgemm` | `moe/moe_extended_ref.cpp` | — | active |
-| `moe_grouped_qswiglu` | `moe/moe_extended_ref.cpp` | — | active |
+| `moe_route_grouped` | `moe/moe_ref.cpp` | `moe/moe` | **landed** |
+| `moe_gather_backward` | `moe/moe_extended_ref.cpp` | — | **landed** |
+| `moe_finalize_backward` | `moe/moe_extended_ref.cpp` | — | **landed** |
+| `moe_grouped_gemm_backward_input` | `moe/moe_extended_ref.cpp` | — | **landed** |
+| `moe_grouped_gemm_backward_weight` | `moe/moe_extended_ref.cpp` | — | **landed** |
+| `moe_grouped_qgemm` | `moe/moe_extended_ref.cpp` | — | **landed** |
+| `moe_grouped_qswiglu` | `moe/moe_extended_ref.cpp` | — | **landed** |
 
 ## Phase 5 — BaseQ Canonical Family (9)
 

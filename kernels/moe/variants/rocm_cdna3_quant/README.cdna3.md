@@ -45,4 +45,6 @@ make test    # -> "ALL PASS (0 failures)"
 Raw: `perf/results/2026-07-06/moe-quant-mfma/`.
 
 2026-07-26: all 13 harness checks pass, including `moe_gemm_gguf q2_K`,
-`moe_grouped_qgemm q2_K`, and `moe_grouped_qswiglu q2_K`.
+`moe_grouped_qgemm q2_K`, and `moe_grouped_qswiglu q2_K`. The Phase 4
+scalar-vs-row-parallel timing run is recorded in
+`perf/results/2026-07-26/moe-phase4-quant-final2/`.

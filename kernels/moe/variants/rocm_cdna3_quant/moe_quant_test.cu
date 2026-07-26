@@ -18,6 +18,7 @@
 #include <random>
 #include <cmath>
 #include <algorithm>
+#include <cstring>
 
 using namespace tmoeq;
 static int g_fail = 0;
@@ -56,7 +57,220 @@ static long ref_swizzle_local(int row, int group, int num_k_tiles) {
 static std::mt19937 rng(9);
 static std::vector<float> randv(size_t n,float lo,float hi){std::uniform_real_distribution<float> d(lo,hi);std::vector<float> v(n);for(auto&x:v)x=d(rng);return v;}
 
-int main() {
+struct BenchStats {
+    float median_ms;
+    float min_ms;
+    float max_ms;
+    int warmups;
+    int iters;
+    int repeats;
+};
+
+template <typename F>
+BenchStats bench_kernel(F&& launch, int warmups = 5, int iters = 20,
+                        int repeats = 10) {
+    hipEvent_t start, stop;
+    CK(hipEventCreate(&start));
+    CK(hipEventCreate(&stop));
+    for (int i = 0; i < warmups; ++i)
+        for (int r = 0; r < repeats; ++r) launch();
+    CK(hipDeviceSynchronize());
+    std::vector<float> samples(iters);
+    for (int i = 0; i < iters; ++i) {
+        CK(hipEventRecord(start));
+        for (int r = 0; r < repeats; ++r) launch();
+        CK(hipEventRecord(stop));
+        CK(hipEventSynchronize(stop));
+        CK(hipEventElapsedTime(&samples[i], start, stop));
+        samples[i] /= float(repeats);
+    }
+    CK(hipEventDestroy(start));
+    CK(hipEventDestroy(stop));
+    std::sort(samples.begin(), samples.end());
+    return {samples[samples.size() / 2], samples.front(), samples.back(),
+            warmups, iters, repeats};
+}
+
+static void report_bench(const char* base_name, const BenchStats& base,
+                         const char* cand_name, const BenchStats& cand,
+                         double work_items) {
+    const double base_rate = work_items / (double(base.median_ms) * 1e-3);
+    const double cand_rate = work_items / (double(cand.median_ms) * 1e-3);
+    printf("  %-34s %8.4f ms  %.2f Gop/s (min %.4f max %.4f spread %.2fx, w%d/i%d/r%d)\n",
+           base_name, base.median_ms, base_rate / 1e9, base.min_ms, base.max_ms,
+           base.max_ms / std::max(base.min_ms, 1e-9f), base.warmups, base.iters,
+           base.repeats);
+    printf("  %-34s %8.4f ms  %.2f Gop/s (min %.4f max %.4f spread %.2fx, w%d/i%d/r%d)\n",
+           cand_name, cand.median_ms, cand_rate / 1e9, cand.min_ms, cand.max_ms,
+           cand.max_ms / std::max(cand.min_ms, 1e-9f), cand.warmups, cand.iters,
+           cand.repeats);
+    printf("  speedup %.2fx  keep=%s\n", base.median_ms / cand.median_ms,
+           cand.median_ms <= base.median_ms ? cand_name : base_name);
+}
+
+static void fill_q2k_blocks(std::vector<uint8_t>& v) {
+    constexpr int BB = 84;
+    std::uniform_int_distribution<int> byte(0, 255);
+    for (size_t blk = 0; blk < v.size() / BB; ++blk) {
+        uint8_t* b = v.data() + blk * BB;
+        for (int i = 0; i < 80; ++i) b[i] = uint8_t(byte(rng));
+        *reinterpret_cast<_Float16*>(b + 80) =
+            (_Float16)(0.01f + 0.02f * byte(rng) / 255.f);
+        *reinterpret_cast<_Float16*>(b + 82) =
+            (_Float16)(0.005f * byte(rng) / 255.f);
+    }
+}
+
+template<typename FMT>
+__global__ void moe_grouped_qgemm_scalar(float* __restrict__ Y,
+                                         const half* __restrict__ A,
+                                         const uint8_t* __restrict__ B,
+                                         const int* __restrict__ expert_ids,
+                                         const float* __restrict__ bias,
+                                         int rows, int N, int K, int use_bias) {
+    const int r = blockIdx.x;
+    if (r >= rows) return;
+    const int e = expert_ids[r];
+    if (e < 0) {
+        for (int n = 0; n < N; ++n) Y[(size_t)r * N + n] = 0.0f;
+        return;
+    }
+    const int bpr = K / FMT::block_k;
+    const uint8_t* Be = B + (size_t)e * N * bpr * FMT::block_bytes;
+    const half* Ar = A + (size_t)r * K;
+    for (int n = 0; n < N; ++n) {
+        const uint8_t* wrow = Be + (size_t)n * bpr * FMT::block_bytes;
+        float acc = 0.0f;
+        for (int kb = 0; kb < bpr; ++kb) {
+            const uint8_t* blk = wrow + (size_t)kb * FMT::block_bytes;
+            const int base = kb * FMT::block_k;
+            for (int c = 0; c < FMT::block_k; c += 8) {
+                float w[8];
+                dequant8<FMT>(blk, c, w);
+                #pragma unroll
+                for (int i = 0; i < 8; ++i) acc += __half2float(Ar[base + c + i]) * w[i];
+            }
+        }
+        if (use_bias) acc += bias[(size_t)e * N + n];
+        Y[(size_t)r * N + n] = acc;
+    }
+}
+
+template<typename FMT>
+__global__ void moe_grouped_qswiglu_scalar(float* __restrict__ Y,
+                                           const half* __restrict__ A,
+                                           const uint8_t* __restrict__ B,
+                                           const int* __restrict__ expert_ids,
+                                           const float* __restrict__ bias,
+                                           int rows, int inter, int K,
+                                           int use_bias, int oai_mode,
+                                           float alpha, float limit) {
+    const int r = blockIdx.x;
+    if (r >= rows) return;
+    const int e = expert_ids[r];
+    if (e < 0) {
+        for (int n = 0; n < inter; ++n) Y[(size_t)r * inter + n] = 0.0f;
+        return;
+    }
+    const int bpr = K / FMT::block_k;
+    const int outs = 2 * inter;
+    const uint8_t* Be = B + (size_t)e * outs * bpr * FMT::block_bytes;
+    const half* Ar = A + (size_t)r * K;
+    for (int n = 0; n < inter; ++n) {
+        const uint8_t* grow = Be + (size_t)n * bpr * FMT::block_bytes;
+        const uint8_t* urow = Be + (size_t)(inter + n) * bpr * FMT::block_bytes;
+        float gate = 0.0f, up = 0.0f;
+        for (int kb = 0; kb < bpr; ++kb) {
+            const uint8_t* gb = grow + (size_t)kb * FMT::block_bytes;
+            const uint8_t* ub = urow + (size_t)kb * FMT::block_bytes;
+            const int base = kb * FMT::block_k;
+            for (int c = 0; c < FMT::block_k; c += 8) {
+                float wg[8], wu[8];
+                dequant8<FMT>(gb, c, wg);
+                dequant8<FMT>(ub, c, wu);
+                #pragma unroll
+                for (int i = 0; i < 8; ++i) {
+                    const float a = __half2float(Ar[base + c + i]);
+                    gate += a * wg[i];
+                    up += a * wu[i];
+                }
+            }
+        }
+        if (use_bias) {
+            gate += bias[(size_t)e * outs + n];
+            up += bias[(size_t)e * outs + inter + n];
+        }
+        float out;
+        if (oai_mode) {
+            gate = fminf(gate, limit);
+            up = fminf(fmaxf(up, -limit), limit);
+            out = gate / (1.0f + expf(-alpha * gate)) * (1.0f + up);
+        } else {
+            out = gate / (1.0f + expf(-gate)) * up;
+        }
+        Y[(size_t)r * inter + n] = out;
+    }
+}
+
+void run_bench() {
+    printf("== Phase 4 quantized MoE A/B\n");
+    const int R = 4096, E = 8, N = 128, K = 512, INTER = 64;
+    const int bpr = K / 256, BB = 84, OUTS = 2 * INTER;
+    std::vector<int> eid(R);
+    for (int r = 0; r < R; ++r) eid[r] = (r % 19 == 0) ? -1 : r % E;
+    auto A = randv((size_t)R * K, -1.0f, 1.0f);
+    std::vector<__half> Ah(A.size());
+    for (size_t i = 0; i < Ah.size(); ++i) Ah[i] = __float2half(A[i]);
+    std::vector<uint8_t> Bg((size_t)E * N * bpr * BB);
+    std::vector<uint8_t> Bs((size_t)E * OUTS * bpr * BB);
+    fill_q2k_blocks(Bg);
+    fill_q2k_blocks(Bs);
+    auto bg = randv((size_t)E * N, -0.3f, 0.3f);
+    auto bs = randv((size_t)E * OUTS, -0.3f, 0.3f);
+    auto* dA = dnew(Ah);
+    auto* dEid = dnew(eid);
+    auto* dBg = dnew(Bg);
+    auto* dBs = dnew(Bs);
+    auto* dbg = dnew(bg);
+    auto* dbs = dnew(bs);
+    float* y0 = dzero<float>((size_t)R * N);
+    float* y1 = dzero<float>((size_t)R * N);
+    float* sy0 = dzero<float>((size_t)R * INTER);
+    float* sy1 = dzero<float>((size_t)R * INTER);
+
+    auto qgemm_base = [&] {
+        moe_grouped_qgemm_scalar<q2_K><<<R, 1>>>(
+            y0, reinterpret_cast<const half*>(dA), dBg, dEid, dbg, R, N, K, 1);
+    };
+    auto qgemm_cand = [&] {
+        moe_grouped_qgemm<q2_K><<<R, 128>>>(
+            y1, reinterpret_cast<const half*>(dA), dBg, dEid, dbg, R, N, K, 1);
+    };
+    qgemm_base(); qgemm_cand(); CK(hipDeviceSynchronize());
+    printf("== moe_grouped_qgemm q2_K rows=%d experts=%d N=%d K=%d\n", R, E, N, K);
+    report_bench("scalar one-thread/row", bench_kernel(qgemm_base, 5, 20, 100),
+                 "row-parallel qgemm", bench_kernel(qgemm_cand, 5, 20, 200),
+                 2.0 * R * N * K);
+
+    auto qswiglu_base = [&] {
+        moe_grouped_qswiglu_scalar<q2_K><<<R, 1>>>(
+            sy0, reinterpret_cast<const half*>(dA), dBs, dEid, dbs, R, INTER, K,
+            1, 0, 1.702f, 7.0f);
+    };
+    auto qswiglu_cand = [&] {
+        moe_grouped_qswiglu<q2_K><<<R, 128>>>(
+            sy1, reinterpret_cast<const half*>(dA), dBs, dEid, dbs, R, INTER, K,
+            1, 0, 1.702f, 7.0f);
+    };
+    qswiglu_base(); qswiglu_cand(); CK(hipDeviceSynchronize());
+    printf("== moe_grouped_qswiglu q2_K rows=%d experts=%d inter=%d K=%d\n",
+           R, E, INTER, K);
+    report_bench("scalar one-thread/row", bench_kernel(qswiglu_base, 5, 20, 20),
+                 "row-parallel qswiglu", bench_kernel(qswiglu_cand, 5, 20, 100),
+                 4.0 * R * INTER * K);
+}
+
+int main(int argc, char** argv) {
     // ---- fp8 MoE GEMM ----
     {
         const int E = 4, TILES = 6, total_rows = TILES * 32, N = 128, K = 256;
@@ -513,5 +727,6 @@ int main() {
     }
 
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL PASS", g_fail);
+    if (g_fail == 0 && argc > 1 && std::strcmp(argv[1], "--bench") == 0) run_bench();
     return g_fail ? 1 : 0;
 }

@@ -41,4 +41,5 @@ make test    # -> "ALL PASS (0 failures)"
 Raw: `perf/results/2026-07-06/moe/`.
 
 2026-07-26: all 13 harness checks pass, including the five Phase 4 grouped
-routing/backward additions.
+routing/backward additions. The Phase 4 scalar-vs-parallel timing run is
+recorded in `perf/results/2026-07-26/moe-phase4-dense-final2/`.

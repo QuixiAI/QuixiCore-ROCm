@@ -20,6 +20,7 @@
 #include <random>
 #include <cmath>
 #include <algorithm>
+#include <cstring>
 #include <numeric>
 
 using namespace tmoe;
@@ -57,7 +58,359 @@ static std::vector<float> randv(size_t n, float lo = -1.0f, float hi = 1.0f) {
     return v;
 }
 
-int main() {
+struct BenchStats {
+    float median_ms;
+    float min_ms;
+    float max_ms;
+    int warmups;
+    int iters;
+    int repeats;
+};
+
+template <typename F>
+BenchStats bench_kernel(F&& launch, int warmups = 5, int iters = 20,
+                        int repeats = 10) {
+    hipEvent_t start, stop;
+    CUCHECK(hipEventCreate(&start));
+    CUCHECK(hipEventCreate(&stop));
+    for (int i = 0; i < warmups; ++i)
+        for (int r = 0; r < repeats; ++r) launch();
+    CUCHECK(hipDeviceSynchronize());
+    std::vector<float> samples(iters);
+    for (int i = 0; i < iters; ++i) {
+        CUCHECK(hipEventRecord(start));
+        for (int r = 0; r < repeats; ++r) launch();
+        CUCHECK(hipEventRecord(stop));
+        CUCHECK(hipEventSynchronize(stop));
+        CUCHECK(hipEventElapsedTime(&samples[i], start, stop));
+        samples[i] /= float(repeats);
+    }
+    CUCHECK(hipEventDestroy(start));
+    CUCHECK(hipEventDestroy(stop));
+    std::sort(samples.begin(), samples.end());
+    return {samples[samples.size() / 2], samples.front(), samples.back(),
+            warmups, iters, repeats};
+}
+
+static void report_bench(const char* base_name, const BenchStats& base,
+                         const char* cand_name, const BenchStats& cand,
+                         double work_items) {
+    const double base_rate = work_items / (double(base.median_ms) * 1e-3);
+    const double cand_rate = work_items / (double(cand.median_ms) * 1e-3);
+    printf("  %-34s %8.4f ms  %.2f Gitem/s (min %.4f max %.4f spread %.2fx, w%d/i%d/r%d)\n",
+           base_name, base.median_ms, base_rate / 1e9, base.min_ms, base.max_ms,
+           base.max_ms / std::max(base.min_ms, 1e-9f), base.warmups, base.iters,
+           base.repeats);
+    printf("  %-34s %8.4f ms  %.2f Gitem/s (min %.4f max %.4f spread %.2fx, w%d/i%d/r%d)\n",
+           cand_name, cand.median_ms, cand_rate / 1e9, cand.min_ms, cand.max_ms,
+           cand.max_ms / std::max(cand.min_ms, 1e-9f), cand.warmups, cand.iters,
+           cand.repeats);
+    printf("  speedup %.2fx  keep=%s\n", base.median_ms / cand.median_ms,
+           cand.median_ms <= base.median_ms ? cand_name : base_name);
+}
+
+__device__ __forceinline__ float bench_score(float v, int scoring) {
+    if (scoring == MOE_SCORE_SOFTMAX) return expf(v);
+    if (scoring == MOE_SCORE_SIGMOID) return 1.0f / (1.0f + expf(-v));
+    return sqrtf(log1pf(expf(-fabsf(v))) + fmaxf(v, 0.0f));
+}
+
+__global__ void moe_route_grouped_scalar(const float* __restrict__ logits,
+                                         const float* __restrict__ bias,
+                                         int* __restrict__ topk_ids,
+                                         float* __restrict__ topk_weights,
+                                         int tokens, int E, int K, int groups,
+                                         int top_groups, int renormalize,
+                                         float routed_scale, int scoring) {
+    constexpr int MAX_E = 128;
+    constexpr int MAX_G = 64;
+    constexpr int MAX_K = MOE_MAX_K;
+    const int token = blockIdx.x * blockDim.x + threadIdx.x;
+    if (token >= tokens || E > MAX_E || groups > MAX_G || K > MAX_K) return;
+    float score[MAX_E];
+    float select[MAX_E];
+    const float* row = logits + (long)token * E;
+    if (scoring == MOE_SCORE_SOFTMAX) {
+        float m = MOE_NEG_INF;
+        for (int e = 0; e < E; ++e) m = fmaxf(m, row[e]);
+        float den = 0.0f;
+        for (int e = 0; e < E; ++e) {
+            score[e] = expf(row[e] - m);
+            den += score[e];
+        }
+        for (int e = 0; e < E; ++e) score[e] /= den;
+    } else {
+        for (int e = 0; e < E; ++e) score[e] = bench_score(row[e], scoring);
+    }
+    for (int e = 0; e < E; ++e) select[e] = score[e] + (bias ? bias[e] : 0.0f);
+
+    float group_score[MAX_G];
+    bool keep[MAX_G];
+    const int gsz = E / groups;
+    for (int g = 0; g < groups; ++g) {
+        keep[g] = false;
+        float first = MOE_NEG_INF;
+        float second = MOE_NEG_INF;
+        for (int i = 0; i < gsz; ++i) {
+            const float v = select[g * gsz + i];
+            if (v > first) { second = first; first = v; }
+            else if (v > second) { second = v; }
+        }
+        group_score[g] = first + (gsz > 1 ? second : 0.0f);
+    }
+    for (int r = 0; r < top_groups; ++r) {
+        int best = -1;
+        for (int g = 0; g < groups; ++g) {
+            if (keep[g]) continue;
+            if (best < 0 || group_score[g] > group_score[best]) best = g;
+        }
+        keep[best] = true;
+    }
+
+    int ids[MAX_K];
+    float vals[MAX_K];
+    for (int k = 0; k < K; ++k) { ids[k] = -1; vals[k] = MOE_NEG_INF; }
+    for (int e = 0; e < E; ++e) {
+        if (!keep[e / gsz]) continue;
+        const float v = select[e];
+        for (int k = 0; k < K; ++k) {
+            if (ids[k] < 0 || v > vals[k] || (v == vals[k] && e < ids[k])) {
+                for (int j = K - 1; j > k; --j) { ids[j] = ids[j - 1]; vals[j] = vals[j - 1]; }
+                ids[k] = e;
+                vals[k] = v;
+                break;
+            }
+        }
+    }
+    float den = 0.0f;
+    for (int k = 0; k < K; ++k) den += score[ids[k]];
+    const float scale = renormalize ? routed_scale / den : routed_scale;
+    for (int k = 0; k < K; ++k) {
+        topk_ids[(long)token * K + k] = ids[k];
+        topk_weights[(long)token * K + k] = score[ids[k]] * scale;
+    }
+}
+
+__global__ void moe_gather_backward_scalar(const float* __restrict__ grad_gathered,
+                                           const int* __restrict__ gather_rows,
+                                           float* __restrict__ grad_input,
+                                           int gathered_rows, int dim) {
+    const int r = blockIdx.x * blockDim.x + threadIdx.x;
+    if (r >= gathered_rows) return;
+    const int src = gather_rows[r];
+    if (src < 0) return;
+    for (int i = 0; i < dim; ++i)
+        atomicAdd(&grad_input[(long)src * dim + i], grad_gathered[(long)r * dim + i]);
+}
+
+__global__ void moe_finalize_backward_scalar(const float* __restrict__ grad_out,
+                                             const float* __restrict__ expert_out,
+                                             const int* __restrict__ inverse,
+                                             const float* __restrict__ expert_weights,
+                                             float* __restrict__ grad_expert_out,
+                                             float* __restrict__ grad_expert_weights,
+                                             int tokens, int top_k, int dim) {
+    const int token = blockIdx.x * blockDim.x + threadIdx.x;
+    if (token >= tokens) return;
+    for (int k = 0; k < top_k; ++k) {
+        const long route = (long)token * top_k + k;
+        const int p = inverse[route];
+        if (p < 0) continue;
+        const float w = expert_weights[route];
+        float wg = 0.0f;
+        for (int i = 0; i < dim; ++i) {
+            const float g = grad_out[(long)token * dim + i];
+            atomicAdd(&grad_expert_out[(long)p * dim + i], w * g);
+            wg += g * expert_out[(long)p * dim + i];
+        }
+        grad_expert_weights[route] = wg;
+    }
+}
+
+__global__ void moe_grouped_gemm_backward_input_scalar(
+    const float* __restrict__ grad_out, const float* __restrict__ W,
+    const int* __restrict__ expert_ids, float* __restrict__ grad_input,
+    int rows, int K_in, int N_out) {
+    const int r = blockIdx.x * blockDim.x + threadIdx.x;
+    if (r >= rows) return;
+    const int e = expert_ids[r];
+    if (e < 0) return;
+    const float* We = W + (long)e * K_in * N_out;
+    const float* grow = grad_out + (long)r * N_out;
+    for (int i = 0; i < K_in; ++i) {
+        float acc = 0.0f;
+        for (int o = 0; o < N_out; ++o) acc += grow[o] * We[(long)i * N_out + o];
+        grad_input[(long)r * K_in + i] = acc;
+    }
+}
+
+__global__ void moe_grouped_gemm_backward_weight_scalar(
+    const float* __restrict__ x, const float* __restrict__ grad_out,
+    const int* __restrict__ expert_ids, float* __restrict__ grad_weights,
+    int rows, int K_in, int N_out) {
+    const int r = blockIdx.x * blockDim.x + threadIdx.x;
+    if (r >= rows) return;
+    const int e = expert_ids[r];
+    if (e < 0) return;
+    float* ge = grad_weights + (long)e * K_in * N_out;
+    const float* xr = x + (long)r * K_in;
+    const float* gr = grad_out + (long)r * N_out;
+    for (long t = 0; t < (long)K_in * N_out; ++t) {
+        const int i = int(t / N_out);
+        const int o = int(t % N_out);
+        atomicAdd(&ge[t], xr[i] * gr[o]);
+    }
+}
+
+void run_bench() {
+    printf("== Phase 4 dense MoE A/B\n");
+    {
+        const int tokens = 16384, E = 128, K = 4, groups = 16, top_groups = 4;
+        const float routed_scale = 2.5f;
+        auto logits = randv((size_t)tokens * E, -3.0f, 3.0f);
+        auto bias = randv(E, -0.2f, 0.2f);
+        auto* dlog = dnew(logits);
+        auto* dbias = dnew(bias);
+        int* ids0 = dzero<int>((size_t)tokens * K);
+        int* ids1 = dzero<int>((size_t)tokens * K);
+        float* w0 = dzero<float>((size_t)tokens * K);
+        float* w1 = dzero<float>((size_t)tokens * K);
+        auto base = [&] {
+            moe_route_grouped_scalar<<<(tokens + 127) / 128, 128>>>(
+                dlog, dbias, ids0, w0, tokens, E, K, groups, top_groups, 1,
+                routed_scale, MOE_SCORE_SIGMOID);
+        };
+        auto cand = [&] {
+            moe_route_grouped<float><<<tokens, 32, 2 * E * sizeof(float)>>>(
+                dlog, dbias, ids1, w1, E, K, groups, top_groups, 1,
+                routed_scale, MOE_SCORE_SIGMOID);
+        };
+        base(); cand(); CUCHECK(hipDeviceSynchronize());
+        printf("== moe_route_grouped fp32 tokens=%d E=%d K=%d groups=%d top_groups=%d\n",
+               tokens, E, K, groups, top_groups);
+        report_bench("scalar one-thread/token", bench_kernel(base, 5, 20, 20),
+                     "warp grouped route", bench_kernel(cand, 5, 20, 100),
+                     double(tokens) * E);
+    }
+
+    {
+        const int tokens = 4096, gathered_rows = 16384, dim = 1024;
+        auto grad = randv((size_t)gathered_rows * dim, -1.0f, 1.0f);
+        std::vector<int> rows(gathered_rows);
+        for (int r = 0; r < gathered_rows; ++r) rows[r] = (r % 11 == 0) ? -1 : (r * 17) % tokens;
+        auto* dgrad = dnew(grad);
+        auto* drows = dnew(rows);
+        float* out0 = dzero<float>((size_t)tokens * dim);
+        float* out1 = dzero<float>((size_t)tokens * dim);
+        auto base = [&] {
+            CUCHECK(hipMemset(out0, 0, (size_t)tokens * dim * sizeof(float)));
+            moe_gather_backward_scalar<<<(gathered_rows + 255) / 256, 256>>>(
+                dgrad, drows, out0, gathered_rows, dim);
+        };
+        auto cand = [&] {
+            CUCHECK(hipMemset(out1, 0, (size_t)tokens * dim * sizeof(float)));
+            moe_gather_backward<float><<<gathered_rows, 128>>>(
+                dgrad, drows, out1, gathered_rows, dim);
+        };
+        base(); cand(); CUCHECK(hipDeviceSynchronize());
+        printf("== moe_gather_backward fp32 gathered_rows=%d tokens=%d dim=%d\n",
+               gathered_rows, tokens, dim);
+        report_bench("scalar one-thread/row", bench_kernel(base, 5, 20, 10),
+                     "row-parallel atomics", bench_kernel(cand, 5, 20, 100),
+                     double(gathered_rows) * dim);
+    }
+
+    {
+        const int tokens = 8192, top_k = 4, dim = 1024, routes = tokens * top_k;
+        auto grad = randv((size_t)tokens * dim, -1.0f, 1.0f);
+        auto expert = randv((size_t)routes * dim, -1.0f, 1.0f);
+        auto weights = randv(routes, 0.1f, 1.0f);
+        std::vector<int> inv(routes);
+        for (int r = 0; r < routes; ++r) inv[r] = (r * 37) % routes;
+        auto* dgrad = dnew(grad);
+        auto* dexpert = dnew(expert);
+        auto* dinv = dnew(inv);
+        auto* dweights = dnew(weights);
+        float* geo0 = dzero<float>((size_t)routes * dim);
+        float* geo1 = dzero<float>((size_t)routes * dim);
+        float* gew0 = dzero<float>(routes);
+        float* gew1 = dzero<float>(routes);
+        auto base = [&] {
+            CUCHECK(hipMemset(geo0, 0, (size_t)routes * dim * sizeof(float)));
+            moe_finalize_backward_scalar<<<(tokens + 127) / 128, 128>>>(
+                dgrad, dexpert, dinv, dweights, geo0, gew0, tokens, top_k, dim);
+        };
+        auto cand = [&] {
+            CUCHECK(hipMemset(geo1, 0, (size_t)routes * dim * sizeof(float)));
+            moe_finalize_backward<float><<<tokens, 32>>>(
+                dgrad, dexpert, dinv, dweights, geo1, gew1, top_k, dim);
+        };
+        base(); cand(); CUCHECK(hipDeviceSynchronize());
+        printf("== moe_finalize_backward fp32 tokens=%d K=%d dim=%d\n",
+               tokens, top_k, dim);
+        report_bench("scalar one-thread/token", bench_kernel(base, 5, 20, 10),
+                     "warp token backward", bench_kernel(cand, 5, 20, 50),
+                     double(tokens) * top_k * dim);
+    }
+
+    {
+        const int rows = 2048, experts = 16, kin = 256, nout = 256;
+        auto grad = randv((size_t)rows * nout, -1.0f, 1.0f);
+        auto weights = randv((size_t)experts * kin * nout, -1.0f, 1.0f);
+        std::vector<int> eid(rows);
+        for (int r = 0; r < rows; ++r) eid[r] = (r % 13 == 0) ? -1 : r % experts;
+        auto* dgrad = dnew(grad);
+        auto* dw = dnew(weights);
+        auto* deid = dnew(eid);
+        float* out0 = dzero<float>((size_t)rows * kin);
+        float* out1 = dzero<float>((size_t)rows * kin);
+        auto base = [&] {
+            moe_grouped_gemm_backward_input_scalar<<<(rows + 127) / 128, 128>>>(
+                dgrad, dw, deid, out0, rows, kin, nout);
+        };
+        auto cand = [&] {
+            moe_grouped_gemm_backward_input<float><<<rows, 128>>>(
+                dgrad, dw, deid, out1, rows, kin, nout);
+        };
+        base(); cand(); CUCHECK(hipDeviceSynchronize());
+        printf("== moe_grouped_gemm_backward_input fp32 rows=%d experts=%d K=%d N=%d\n",
+               rows, experts, kin, nout);
+        report_bench("scalar one-thread/row", bench_kernel(base, 5, 20, 50),
+                     "row-parallel input grad", bench_kernel(cand, 5, 20, 20),
+                     2.0 * rows * kin * nout);
+    }
+
+    {
+        const int rows = 2048, experts = 16, kin = 128, nout = 128;
+        auto x = randv((size_t)rows * kin, -1.0f, 1.0f);
+        auto grad = randv((size_t)rows * nout, -1.0f, 1.0f);
+        std::vector<int> eid(rows);
+        for (int r = 0; r < rows; ++r) eid[r] = (r % 17 == 0) ? -1 : r % experts;
+        auto* dx = dnew(x);
+        auto* dgrad = dnew(grad);
+        auto* deid = dnew(eid);
+        float* out0 = dzero<float>((size_t)experts * kin * nout);
+        float* out1 = dzero<float>((size_t)experts * kin * nout);
+        auto base = [&] {
+            CUCHECK(hipMemset(out0, 0, (size_t)experts * kin * nout * sizeof(float)));
+            moe_grouped_gemm_backward_weight_scalar<<<(rows + 127) / 128, 128>>>(
+                dx, dgrad, deid, out0, rows, kin, nout);
+        };
+        auto cand = [&] {
+            CUCHECK(hipMemset(out1, 0, (size_t)experts * kin * nout * sizeof(float)));
+            moe_grouped_gemm_backward_weight<float><<<rows, 256>>>(
+                dx, dgrad, deid, out1, rows, kin, nout);
+        };
+        base(); cand(); CUCHECK(hipDeviceSynchronize());
+        printf("== moe_grouped_gemm_backward_weight fp32 rows=%d experts=%d K=%d N=%d\n",
+               rows, experts, kin, nout);
+        report_bench("scalar one-thread/row", bench_kernel(base, 5, 20, 10),
+                     "row-parallel weight grad", bench_kernel(cand, 5, 20, 10),
+                     2.0 * rows * kin * nout);
+    }
+}
+
+int main(int argc, char** argv) {
     const int T = 200, E = 11, K = 4, H = 64, INTER = 96;
     const int TK = T * K;
     const int total_pad_max = ((TK + 31 * E) + 31) / 32 * 32;
@@ -422,5 +775,6 @@ int main() {
     }
 
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL PASS", g_fail);
+    if (g_fail == 0 && argc > 1 && std::strcmp(argv[1], "--bench") == 0) run_bench();
     return g_fail ? 1 : 0;
 }

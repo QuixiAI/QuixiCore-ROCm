@@ -10,6 +10,8 @@ moe_test.out: moe_test.cu tm_moe_kernels.cuh tm_warp.cuh
 	$(HIPCC) $(HIPFLAGS) $< -o $@
 test: all
 	HIP_VISIBLE_DEVICES=0 ./moe_test.out
+bench: all
+	HIP_VISIBLE_DEVICES=0 ./moe_test.out --bench
 clean:
 	rm -f *.out
-.PHONY: all test clean
+.PHONY: all test bench clean

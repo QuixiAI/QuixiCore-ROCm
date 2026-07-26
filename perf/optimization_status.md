@@ -1723,6 +1723,76 @@ MFMA/LDS dense prefill route for large-batch matmul.
 Raw results:
 `perf/results/2026-07-26/matmul-decode_epilogues-packed-phase3-rerun/`.
 
+## 2026-07-26: MoE Phase 4 CPU/Metal parity completion
+
+Status: landed.
+
+Current implementation: `kernels/moe/variants/rocm_cdna3` and
+`kernels/moe/variants/rocm_cdna3_quant`. Current public route:
+`.quixicore/kernels.yaml` operations `moe_route_grouped`,
+`moe_gather_backward`, `moe_finalize_backward`,
+`moe_grouped_gemm_backward_input`, `moe_grouped_gemm_backward_weight`,
+`moe_grouped_qgemm`, and `moe_grouped_qswiglu`.
+
+References inspected: `../QuixiCore-CPU/kernels/moe/moe_ref.cpp`,
+`../QuixiCore-CPU/kernels/moe/moe_extended_ref.cpp`,
+`../QuixiCore-Metal/kernels/moe/moe/moe.metal`,
+`kernels/moe/variants/rocm_cdna3/tm_moe_kernels.cuh`,
+`kernels/moe/variants/rocm_cdna3_quant/tm_moe_quant_kernels.cuh`, and the
+2026-07-06 MoE notebook entries above.
+
+Correctness: **ALL PASS** on MI300X. Dense MoE reports 13/13 harness checks
+passing, including grouped routing, gather backward, finalize backward, and
+both grouped-GEMM backward paths. Quantized MoE reports 13/13 harness checks
+passing, including `moe_grouped_qgemm q2_K` and `moe_grouped_qswiglu q2_K`.
+Oracles are fp64 host replicas of the CPU/Metal contracts, with exact id checks
+where applicable and fp32-dot tolerances for q2_K row-indexed paths.
+
+Dense Phase 4 baseline/candidate: one factor changed from scalar row/token
+baselines to the current row/warp-parallel kernels. MI300X, fp32, HIP-event
+per-launch median with repeated launches inside each sample.
+
+| Kernel | Shape | Baseline | Candidate | Speedup | Decision |
+|---|---|---:|---:|---:|---|
+| `moe_route_grouped` | tokens=16384 E=128 K=4 groups=16 top_groups=4 | 0.2804 ms | 0.1000 ms | 2.80x | keep warp grouped route |
+| `moe_gather_backward` | gathered_rows=16384 tokens=4096 dim=1024 | 1.6436 ms | 0.0504 ms | 32.59x | keep row-parallel atomics |
+| `moe_finalize_backward` | tokens=8192 K=4 dim=1024 | 10.7431 ms | 0.2292 ms | 46.86x | keep warp token backward |
+| `moe_grouped_gemm_backward_input` | rows=2048 experts=16 K=256 N=256 | 13.4278 ms | 0.4934 ms | 27.21x | keep row-parallel input grad |
+| `moe_grouped_gemm_backward_weight` | rows=2048 experts=16 K=128 N=128 | 12.2180 ms | 0.1281 ms | 95.40x | keep row-parallel weight grad |
+
+Quantized Phase 4 baseline/candidate: one factor changed from scalar
+one-thread-per-row q2_K dot products to the current row-parallel q2_K kernels.
+
+| Kernel | Shape | Baseline | Candidate | Speedup | Decision |
+|---|---|---:|---:|---:|---|
+| `moe_grouped_qgemm` q2_K | rows=4096 experts=8 N=128 K=512 | 3.8500 ms | 0.0847 ms | 45.44x | keep row-parallel qgemm |
+| `moe_grouped_qswiglu` q2_K | rows=4096 experts=8 inter=64 K=512 | 3.2027 ms | 0.0747 ms | 42.85x | keep row-parallel qswiglu |
+
+Environment:
+  GPU: AMD Instinct MI300X (gfx942), device index 0
+  ROCm: 7.2.4   HIP: 7.2.53211-97f5574fe2
+  Container: bare metal (no container)
+  Commit: 8daae0c4 (working tree dirty)
+  Commands:
+    `HIP_VISIBLE_DEVICES=0 make -C kernels/moe/variants/rocm_cdna3 bench`
+    `HIP_VISIBLE_DEVICES=0 make -C kernels/moe/variants/rocm_cdna3_quant bench`
+  Warmups/iterations: correctness once; timing w5/i20 with per-sample launch
+  repeats printed per row (`r10`..`r200`) and HIP-event median/min/max.
+
+Decision: **KEEP** all current Phase 4 CDNA3 kernels. Every measured row beats
+its scalar baseline by at least 2.80x, with the backward and q2_K row-parallel
+paths showing the expected large wins from distributing row work across a block
+or wavefront.
+
+Open questions: sorted-by-expert q2_K rows should continue to prefer the
+existing MFMA tile route (`moe_gemm_gguf`) when the schedule permits one expert
+per 32-row tile; the row-indexed Phase 4 qgemm/qswiglu kernels are the generic
+contract path.
+
+Raw results:
+`perf/results/2026-07-26/moe-phase4-dense-final2/` and
+`perf/results/2026-07-26/moe-phase4-quant-final2/`.
+
 ## 2026-07-26: In-GEMM k-quant Decode (dequant4 MFMA fragment) — LANDED
 
 Status: landed. The 256-superblock k-quants can now run the qgemm fragment path

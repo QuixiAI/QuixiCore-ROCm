@@ -9,6 +9,8 @@ moe_quant_test.out: moe_quant_test.cu tm_moe_quant_kernels.cuh tm_qmm_mfma.cuh q
 	$(HIPCC) $(HIPFLAGS) $< -o $@
 test: all
 	HIP_VISIBLE_DEVICES=0 ./moe_quant_test.out
+bench: all
+	HIP_VISIBLE_DEVICES=0 ./moe_quant_test.out --bench
 clean:
 	rm -f *.out
-.PHONY: all test clean
+.PHONY: all test bench clean
