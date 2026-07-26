@@ -45,7 +45,7 @@ the kernel; a missing entry does not.
 | 2 | Quantized KV-cache codecs | 17 | 11 | 0 | 6 |
 | 3 | Dense matmul epilogues | 10 | 0 | 0 | **10** |
 | 4 | MoE completeness | 7 | 0 | 0 | **7** |
-| 5 | BaseQ canonical family | 9 | 9 | 0 | 0 |
+| 5 | BaseQ canonical family | 9 | 0 | 0 | **9** |
 | 6 | Quant authoring & quantized embedding | 14 | 14 | 0 | 0 |
 | 7 | Sampling & embedding stragglers | 6 | 6 | 0 | 0 |
 | 8 | Linear attention | 9 | 9 | 0 | 0 |
@@ -54,7 +54,7 @@ the kernel; a missing entry does not.
 | 11 | Elementwise & tensor-op surface | 42 | 42 | 0 | 0 |
 | 12 | Convolution & audio | 16 | 16 | 0 | 0 |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **144** | **0** | **34** |
+| | **Total** | **178** | **133** | **0** | **45** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -219,20 +219,31 @@ therefore treated as canonical here.
 Port the shared decode core first (little-endian bitstream, symmetric/affine
 rule, group sizes 32/64/128, BaseQ2/3/4/5/6/8, BF16/F16/E8M0/E4M3 scale
 storage) and validate it byte-exact against the CPU reference before building
-the nine consumers on it. `base_q_lm_head_argmax` must round to output storage
-**before** the argmax and break ties toward the lower token id.
+the nine consumers on it. `base_q_lm_head_argmax` must round scores to the
+input storage type **before** the argmax and break ties toward the lower token
+id.
+
+2026-07-26 update: `kernels/quantization/base_q/variants/rocm_cdna3` landed the
+canonical BaseQ decode core and all nine consumers. The standalone harness
+reports `ALL PASS` for 246 fp64-oracle checks covering all supported bit widths,
+group sizes, BF16/F16/E8M0/E4M3 scale storage, symmetric/affine modes,
+FP32/FP16/BF16 output storage, lower-token LM-head ties, and the 32-row padded
+MoE expert schedule. The Phase 5 benchmark keeps wave64 split-dot projection
+routes for GEMV/GEMM/QKV/SwiGLU/MoE, keeps current dequant/embedding kernels,
+and rejects the streaming LM-head argmax in favor of the materialized
+projection-plus-argmax route.
 
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `base_q_dequant` | `quantization/base_q_ref.cpp` | — | planned |
-| `base_q_gemv` | `quantization/base_q_ref.cpp` | — | planned |
-| `base_q_gemm` | `quantization/base_q_ref.cpp` | — | planned |
-| `base_q_embedding` | `quantization/base_q_ref.cpp` | — | planned |
-| `base_q_gemv_qkv` | `quantization/base_q_ref.cpp` | — | planned |
-| `base_q_gemv_swiglu` | `quantization/base_q_ref.cpp` | — | planned |
-| `base_q_lm_head_argmax` | `quantization/base_q_ref.cpp` | — | planned |
-| `base_q_moe_gemm` | `quantization/base_q_ref.cpp` | — | planned |
-| `base_q_moe_swiglu` | `quantization/base_q_ref.cpp` | — | planned |
+| `base_q_dequant` | `quantization/base_q_ref.cpp` | — | **landed** |
+| `base_q_gemv` | `quantization/base_q_ref.cpp` | — | **landed** |
+| `base_q_gemm` | `quantization/base_q_ref.cpp` | — | **landed** |
+| `base_q_embedding` | `quantization/base_q_ref.cpp` | — | **landed** |
+| `base_q_gemv_qkv` | `quantization/base_q_ref.cpp` | — | **landed** |
+| `base_q_gemv_swiglu` | `quantization/base_q_ref.cpp` | — | **landed** |
+| `base_q_lm_head_argmax` | `quantization/base_q_ref.cpp` | — | **landed** |
+| `base_q_moe_gemm` | `quantization/base_q_ref.cpp` | — | **landed** |
+| `base_q_moe_swiglu` | `quantization/base_q_ref.cpp` | — | **landed** |
 
 ## Phase 6 — Quant Authoring, Fake-Quant, Quantized Embedding (14)
 

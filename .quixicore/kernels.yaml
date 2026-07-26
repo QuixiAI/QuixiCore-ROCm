@@ -193,6 +193,116 @@ operations:
         status: implemented
         path: kernels/quantization/qgemm_int/variants/rocm_cdna3
 
+  base_q_dequant:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/base_q
+    notes: >-
+      Phase 5 canonical BaseQ decode core from the CPU contract: little-endian
+      packed codes, bits 2/3/4/5/6/8, group sizes 32/64/128, BF16/F16/E8M0
+      scales, E4M3 for 8-bit weights, and symmetric/affine decode.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/base_q/variants/rocm_cdna3
+
+  base_q_gemv:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/base_q
+    notes: >-
+      BaseQ single-row projection using the shared decode core and a CDNA3
+      wave64 split-dot route kept over the scalar baseline.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/base_q/variants/rocm_cdna3
+
+  base_q_gemm:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/base_q
+    notes: >-
+      BaseQ batched projection for FP32/FP16/BF16 storage, using wave64
+      reductions over the K dimension and the canonical CPU decode semantics.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/base_q/variants/rocm_cdna3
+
+  base_q_embedding:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/base_q
+    notes: >-
+      BaseQ embedding lookup with invalid ids zero-filling output rows, matching
+      the sibling packed-embedding contract.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/base_q/variants/rocm_cdna3
+
+  base_q_gemv_qkv:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/base_q
+    notes: >-
+      Fused BaseQ Q/K/V projection over descriptor-compatible packed weights,
+      allowing Q/K/V row counts to differ while sharing one activation vector.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/base_q/variants/rocm_cdna3
+
+  base_q_gemv_swiglu:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/base_q
+    notes: >-
+      Fused BaseQ gate/up projection with SiLU(gate) * up epilogue using the
+      shared wave64 projection primitive.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/base_q/variants/rocm_cdna3
+
+  base_q_lm_head_argmax:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/base_q
+    notes: >-
+      BaseQ LM-head greedy selection. Scores are materialized in the input
+      storage type before argmax, preserving storage rounding and lower-token
+      tie breaking; the streaming candidate was measured and rejected.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/base_q/variants/rocm_cdna3
+
+  base_q_moe_gemm:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/base_q
+    notes: >-
+      BaseQ grouped expert projection over the canonical 32-row padded MoE
+      schedule, with flattened [expert, output_row, column] weights.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/base_q/variants/rocm_cdna3
+
+  base_q_moe_swiglu:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/base_q
+    notes: >-
+      BaseQ grouped expert gate/up projection plus SiLU(gate) * up over the
+      canonical 32-row padded MoE schedule.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/base_q/variants/rocm_cdna3
+
   moe:
     family: moe
     status: imported

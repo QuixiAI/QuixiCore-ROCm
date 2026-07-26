@@ -2034,6 +2034,61 @@ re-evaluating any format question — the ordering in this table could flip.
 Project decision (2026-07-26): stay on the antirez routed quant (q8_0
 attention + q2_K routed experts) for GLM-5.2 serving. No requantization.
 
+## 2026-07-26: BaseQ Phase 5 Canonical Family
+
+Status: landed.
+
+Current implementation: `kernels/quantization/base_q/variants/rocm_cdna3`.
+Current public routes: `base_q_dequant`, `base_q_gemv`, `base_q_gemm`,
+`base_q_embedding`, `base_q_gemv_qkv`, `base_q_gemv_swiglu`,
+`base_q_lm_head_argmax`, `base_q_moe_gemm`, and `base_q_moe_swiglu`.
+
+References inspected: `../QuixiCore-CPU/include/quixicore_cpu/base_q.h`,
+`../QuixiCore-CPU/kernels/quantization/base_q_ref.cpp`, and
+`../QuixiCore-CPU/tests/correctness/test_base_q.cpp`. No live BaseQ Metal
+kernel exists; the CPU contract is canonical.
+
+Correctness: `make -C kernels/quantization/base_q/variants/rocm_cdna3 test` ->
+`ALL PASS` (246 checks). Oracle: fp64 host oracle with harness fp32/fp16/bf16
+and exact integer tolerances. Shapes cover BaseQ bits 2/3/4/5/6/8, group sizes
+32/64/128, BF16/F16/E8M0 scales, E4M3 for 8-bit weights, symmetric and affine
+decode, FP32/FP16/BF16 output storage, Q/K/V row-count skew, LM-head lower-token
+ties after storage rounding, and 32-row padded MoE expert schedules.
+
+Hypothesis: BaseQ decode-dot consumers are latency/parallelism limited in a
+scalar one-thread-per-output route. A CDNA3 wave64 split-dot should expose more
+K-dimension parallelism while reusing the common packed-code and scale decoder.
+For LM-head argmax, a single streaming kernel might avoid score writes, but may
+underfill the GPU.
+
+Baseline / experiment: MI300X gfx942, ROCm 7.2.4, HIP 7.2.53211,
+`HIP_VISIBLE_DEVICES=0 make -C kernels/quantization/base_q/variants/rocm_cdna3 bench`.
+BaseQ4 affine, BF16 scales/biases, group size 64, FP16 input unless noted. HIP
+events, 5 warmups, 20 iterations, 100 repeated launches per sample. All spreads
+<= 1.12x.
+
+| operation | baseline/current | candidate/kept | decision |
+|---|---:|---:|---|
+| `base_q_dequant` | n/a | 0.0150 ms, 1273.1 GB/s | KEEP current |
+| `base_q_gemv` | scalar 0.8204 ms | wave64 0.0119 ms, 68.99x | KEEP wave64 |
+| `base_q_gemm` | scalar 0.8661 ms | wave64 0.1093 ms, 7.93x | KEEP wave64 |
+| `base_q_embedding` | n/a | 0.0298 ms, 1408.8 GB/s | KEEP current |
+| `base_q_gemv_qkv` | scalar 0.9173 ms | wave64 0.0126 ms, 72.85x | KEEP wave64 |
+| `base_q_gemv_swiglu` | scalar 1.4720 ms | wave64 0.0187 ms, 78.81x | KEEP wave64 |
+| `base_q_lm_head_argmax` | materialized 0.0389 ms | streaming 13.7230 ms | REJECT streaming; KEEP materialized |
+| `base_q_moe_gemm` | scalar 0.8871 ms | wave64 0.1132 ms, 7.84x | KEEP wave64 |
+| `base_q_moe_swiglu` | scalar 1.6136 ms | wave64 0.1672 ms, 9.65x | KEEP wave64 |
+
+Decision: KEEP the shared decode core, wave64 split-dot projection routes,
+current dequant/embedding routes, and materialized LM-head argmax. REJECT the
+streaming LM-head candidate for the measured vocab shape; it saves score
+storage but provides too little parallel work.
+
+Open questions: specialize hot BaseQ4/6 prefill shapes with LDS-staged decode
+or MFMA-friendly unpacking once a real model route exercises this format.
+
+Raw results: `perf/results/2026-07-26/base-q-phase5-final3/`.
+
 ## 2026-07-26: MXFP8 paged KV-cache codec (Phase 2, 6/17) — LANDED
 
 Status: landed (correctness-first port; no speedup claimed).
