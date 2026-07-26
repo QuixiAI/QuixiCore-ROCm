@@ -346,6 +346,63 @@ int main() {
         g_fail += !(mism==0 && werr<1e-3);
     }
 
+    // ---- GGUF k-quant MoE GEMM (q2_K): the GLM-5.2 routed-expert path ----
+    {
+        const int E = 4, TILES = 6, total_rows = TILES * 32, N = 128, K = 512;
+        const int bpr = K / 256, BB = 84;                    // q2_K: 256/block, 84 B
+        std::vector<int> eot(TILES);
+        for (int t = 0; t < TILES; ++t) eot[t] = (t == TILES - 1) ? -1 : t % E;
+        auto A = randv((size_t)total_rows * K, -1, 1);
+        std::vector<__half> Ah((size_t)total_rows * K);
+        for (size_t i = 0; i < Ah.size(); ++i) Ah[i] = __float2half(A[i]);
+
+        // Random but well-formed q2_K blocks: arbitrary scales/qs bytes, sane d/dmin.
+        std::vector<uint8_t> B((size_t)E * N * bpr * BB);
+        std::uniform_int_distribution<int> byte(0, 255);
+        for (size_t blk = 0; blk < B.size() / BB; ++blk) {
+            uint8_t* b = B.data() + blk * BB;
+            for (int i = 0; i < 80; ++i) b[i] = (uint8_t)byte(rng);
+            // block_bytes is even, so the d/dmin slots are 2-byte aligned.
+            *reinterpret_cast<_Float16*>(b + 80) =
+                (_Float16)(0.01f + 0.02f * (float)byte(rng) / 255.0f);
+            *reinterpret_cast<_Float16*>(b + 82) =
+                (_Float16)(0.005f * (float)byte(rng) / 255.0f);
+        }
+        auto q2k_host = [](const uint8_t* base, int col) -> double {
+            const double d = (float)*reinterpret_cast<const _Float16*>(base + 80);
+            const double dmin = (float)*reinterpret_cast<const _Float16*>(base + 82);
+            const int chunk = col >> 7, pos = col & 127, sidx = pos >> 5;
+            const int sub = (pos >> 4) & 1, l = pos & 15;
+            const int is = chunk * 8 + sidx * 2 + sub;
+            const int q = (base[16 + chunk * 32 + sub * 16 + l] >> (2 * sidx)) & 3;
+            return d * double(base[is] & 0xF) * double(q) - dmin * double(base[is] >> 4);
+        };
+
+        auto dA = dnew(Ah); auto dB = dnew(B); auto dEot = dnew(eot);
+        float* dY = dzero<float>((size_t)total_rows * N);
+        dim3 grid(N / 16, total_rows / 32);
+        moe_gemm_gguf<q2_K><<<grid, 64>>>(dY, reinterpret_cast<const half*>(dA), dB, dEot,
+                                          total_rows, N, K);
+        CK(hipDeviceSynchronize());
+        if (hipGetLastError() != hipSuccess) { printf("KERNEL ERR (gguf)\n"); return 1; }
+        auto Y = d2h(dY, (size_t)total_rows * N);
+
+        double gsum = 0, rsum = 0;
+        for (int r = 0; r < total_rows; ++r) {
+            const int e = eot[r / 32];
+            if (e < 0) continue;
+            for (int n = 0; n < N; ++n) {
+                const uint8_t* row = B.data() + ((size_t)e * N + n) * bpr * BB;
+                double acc = 0;
+                for (int k = 0; k < K; ++k)
+                    acc += (double)A[(size_t)r * K + k] * q2k_host(row + (k / 256) * BB, k % 256);
+                gsum += std::abs((double)Y[(size_t)r * N + n] - acc);
+                rsum += std::abs(acc);
+            }
+        }
+        report("moe_gemm_gguf q2_K (fp64)", gsum / std::max(rsum, 1e-30), 5e-3);
+    }
+
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL PASS", g_fail);
     return g_fail ? 1 : 0;
 }

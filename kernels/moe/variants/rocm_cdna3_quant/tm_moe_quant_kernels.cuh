@@ -70,6 +70,38 @@ __global__ void moe_gemm_fp8(float* __restrict__ Y, const half* __restrict__ A,
     store_scaled(Y, N, total_rows, m0 + 16, n0, accB, sN);
 }
 
+// ---- GGUF k-quant weight-only grouped GEMM. B (E,N,K) packed as FMT blocks:
+// per (e,n) a row of K/block_k blocks of block_bytes. No separate scale tensor —
+// the k-quants carry d/dmin inside each superblock. A = permuted fp16
+// (total_rows, K); Y (total_rows, N) fp32. Same geometry as moe_gemm_fp8:
+// grid (N/16, total_rows/32), each block owns the full 32-row expert tile and
+// reuses each decoded B fragment across both 16-row M-subtiles — which matters
+// more here than for fp8, since it halves the k-quant sub-scale decode too.
+// Decoding goes through load_wfrag -> dequant4<FMT> (one sub-scale unpack per
+// fragment). Padding tiles (expert_of_tile<0) exit. ----
+template<typename FMT>
+__global__ void moe_gemm_gguf(float* __restrict__ Y, const half* __restrict__ A,
+                              const uint8_t* __restrict__ B,
+                              const int* __restrict__ expert_of_tile,
+                              int total_rows, int N, int K) {
+    const int n0 = blockIdx.x * 16, m0 = blockIdx.y * 32;
+    const int e = expert_of_tile[blockIdx.y];
+    if (e < 0) return;
+    const int bpr = K / FMT::block_k;
+    const uint8_t* Be = B + (size_t)e * N * bpr * FMT::block_bytes;
+
+    float4_t accT = {0, 0, 0, 0}, accB = {0, 0, 0, 0};
+    for (int k0 = 0; k0 < K; k0 += 16) {
+        half4_t aT = load_xfrag(A, K, m0, k0);
+        half4_t aB = load_xfrag(A, K, m0 + 16, k0);
+        half4_t b  = load_wfrag<FMT>(Be, bpr, n0, k0);   // decode once, reused by aT and aB
+        accT = mma_16x16x16(aT, b, accT);
+        accB = mma_16x16x16(aB, b, accB);
+    }
+    store_scaled(Y, N, total_rows, m0,      n0, accT, 1.0f);
+    store_scaled(Y, N, total_rows, m0 + 16, n0, accB, 1.0f);
+}
+
 // ---- nvfp4 dual-operand grouped GEMM. A & B both fp4 e2m1 packed 2/byte
 // (row, K/2); per-16-block e4m3 scales: A-scale swizzled per (row_in_expert,
 // group) with per-expert sf_offsets base, B-scale plain per (e,n,group);
