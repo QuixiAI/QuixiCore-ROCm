@@ -2133,3 +2133,48 @@ that consume them.
 Decision: KEEP. Open: `paged_attention_mxfp8` completes the mxfp8 group.
 
 Raw results: terminal output of `make test` in the variant directory.
+
+## 2026-07-26: paged_attention_mxfp8 (Phase 2, 7/17) — LANDED
+
+Status: landed (correctness-first port; no speedup claimed).
+
+Decode attention straight against the MXFP8 paged cache. One 64-lane wavefront
+per (request, query head); lanes stride the head dimension holding one double
+partial per MX group, wave-reduce, then apply the group scales. Codec primitives
+factored into `mxfp8_common.cuh` so the codec and this kernel share one
+definition of the format.
+
+Two contract details reproduced rather than "improved": the online softmax tiles
+at **16** (the sibling q8_0 kernel tiles at 32, and tile size changes the
+floating-point answer), and the reference's `old_weight` is 0 on the first tile
+rather than 1.
+
+Correctness: `make test` -> ALL PASS. vs host replica, worst relative error
+2.499e-04 at window=0 and window=24, 0 non-finite. Not bit-exact by design: the
+lane-strided reduction reorders the within-group summation relative to the CPU's
+sequential loop.
+
+### The harness was silently broken and mutation testing is what found it
+
+First green run reported `worst rel 0.000e+00` on both windows. That is not a
+plausible number for a reordered reduction, and it was wrong three ways:
+
+1. The kernel was emitting **all NaN**.
+2. `std::max(worst, nan)` returns `worst` — NaN comparisons are false — so every
+   NaN left the running maximum at zero. **An entirely broken kernel PASSED.**
+3. The NaN came from the test data: code bytes were filled with rng(0,254),
+   which includes 0x7f, the E4M3FN NaN encoding. The encoder only ever emits
+   that for NaN input, so such a cache is unreachable in practice.
+
+Verified by mutation: perturbing the kernel's final write by 1% was NOT detected
+before the fix and IS after (`worst rel 1.003e-02`, exactly the injection).
+The harness now counts non-finite outputs explicitly and fails on any.
+
+Known remaining limitation, same as the codec: mutating a constant the host
+replica shares (e.g. kScoreTile) moves both sides together and cannot be caught
+by a same-file replica. The guard against that is the hand-computed primitive
+checks in the codec harness, not this comparison.
+
+Baseline: none; functional port, no speedup claimed.
+
+Raw results: terminal output of `make test` in the variant directory.

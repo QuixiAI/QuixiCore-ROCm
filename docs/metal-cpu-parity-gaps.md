@@ -42,7 +42,7 @@ the kernel; a missing entry does not.
 | --- | --- | ---: | ---: | ---: | ---: |
 | 0 | Harness infrastructure | — | — | — | done |
 | 1 | Attention & RoPE variants | 13 | 0 | 0 | **13** |
-| 2 | Quantized KV-cache codecs | 17 | 11 | 0 | 6 |
+| 2 | Quantized KV-cache codecs | 17 | 10 | 0 | 7 |
 | 3 | Dense matmul epilogues | 10 | 0 | 0 | **10** |
 | 4 | MoE completeness | 7 | 0 | 0 | **7** |
 | 5 | BaseQ canonical family | 9 | 0 | 0 | **9** |
@@ -137,7 +137,7 @@ K is **not** transformed. `turboquant_query_transform` is the query-side half.
 | `paged_attention_q8_0` | `attention/attention_q8_kv.cpp` | — | **landed** |
 | `kv_cache_scatter_mxfp8` | `attention/attention_mxfp8.cpp` | — | **landed** |
 | `kv_cache_gather_mxfp8` | `attention/attention_mxfp8.cpp` | — | **landed** |
-| `paged_attention_mxfp8` | `attention/attention_mxfp8.cpp` | — | planned |
+| `paged_attention_mxfp8` | `attention/attention_mxfp8.cpp` | — | **landed** |
 | `kv_cache_scatter_bitnet_kv3` | `serving/serving_quant_ref.cpp` | — | planned |
 | `kv_cache_gather_bitnet_kv3` | `serving/serving_quant_ref.cpp` | — | planned |
 | `paged_attention_bitnet_kv3` | `attention/attention_bitnet_kv3.cpp` | — | planned |
