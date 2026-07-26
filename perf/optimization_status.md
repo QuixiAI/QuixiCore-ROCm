@@ -1598,3 +1598,244 @@ per-tile quantized query — the repo's int8 GEMM already measured a win from
 sdot4; split-K over the context with `merge_attn_states`; vectorized code loads.
 
 Raw results: perf/results/2026-07-25/serving-kv_cache_q8_0/
+
+## 2026-07-26: In-GEMM k-quant Decode (dequant4 MFMA fragment) — LANDED
+
+Status: landed. The 256-superblock k-quants can now run the qgemm fragment path
+directly from packed weights instead of the full-dequant route.
+
+Current implementation: `kernels/quantization/qgemm/variants/rocm_cdna3`.
+New `dequant4<FMT>` span helper (generic in `quant_formats.cuh`, specializations
+for q2_K/q3_K/q4_K/q5_K/q6_K in `quant_formats_tables.cuh`) decodes the 4
+contiguous K that one lane owns in a `v_mfma_f32_16x16x16_f16` B fragment
+(k = k0 + 4*(lane/16) + {0..3}). Every span constant — sub-block index, packed
+sub-scale, nibble shift, high-bit mask — depends only on bits >=4 of the
+in-block column, and a 4-aligned 4-span never crosses a 16-wide sub-block, so
+the bodies are the existing dequant8 bodies with a 4-iteration tail.
+`load_wfrag<FMT>` (`tm_qmm_mfma.cuh`) now routes through `dequant4`; formats
+without a specialization fall back to 4 plain `FMT::dequant` calls, unchanged.
+
+Current public route: unchanged defaults. The harness now measures the in-GEMM
+path alongside the dequant route for every superblock format so the two can be
+compared per shape; production routing is a follow-up.
+
+Motivation: the dequant route (`dequant_to_fp16` then `qgemm<fp16_raw>`)
+materializes all of W as fp16. That is fine for a 512x4096 test tile and
+unusable for serving — a 262 GB Q2_K checkpoint would need ~2 TB of fp16.
+
+References inspected: `../QuixiCore-Metal` `dequant_into_shared` /
+`dequant_into_register` and `qgemm_q2_K` / `qgemm_frag_q2_K` (the Metal backend
+already ships both in-GEMM routes), `tm_qmm_mfma.cuh`, `qgemm.cu`, `perf/perf.md`.
+
+Correctness: `make test` -> ALL PASS (0 failures), 203 PASS lines across the 29
+golden formats (qgemm base / ksplit / wide / ctaLDS, qflux, qgemm_variants).
+Every in-GEMM result is **bit-identical** to the dequant route (bitdiff
+0/32768 on all 11 superblock formats), which is the expected outcome: same
+decode math, same fp32 op order per element.
+
+Baseline / experiment: MI300X gfx942, `HIP_VISIBLE_DEVICES=0`, ROCm/HIP
+7.2.53211, hipcc from ROCm 7.2.4, AMD clang 22.0.0git, native HIP harness (no
+framework). Git `0519f214d4aca37d94242c08d61f35d6d8653bde` plus working tree.
+Command: `make test` / per-format `./qgemm.out <golden dir>`. Golden shape
+N=512 K=4096 M=64, fp16 X, fp32 accumulate. HIP events, 50 iterations.
+
+Decode-overhead = in-GEMM ms / `qgemm<fp16_raw>` ms on the same tile (W already
+dequantized), i.e. the cost of decoding in the fragment:
+
+| format | scalar dequant | dequant4 | in-gemm vs dequant-route | ksplit in-gemm |
+|---|---|---|---|---|
+| q2_K | 1.75x | **1.66x** | 0.95x | **13.76 TFLOP/s** (route: 13.20) |
+| q4_K | 9.12x | **2.79x** | 0.57x | 9.57 TFLOP/s |
+| q6_K | 1.96x | 2.05x | 0.78x | 11.45 TFLOP/s |
+| q3_K | - | 2.98x | 0.54x | - |
+| q5_K | - | - | 0.52x | - |
+
+Decision: KEEP. Two separate findings.
+
+1. `dequant4` is a large win exactly where the sub-scale unpack is branchy:
+   q4_K goes 9.12x -> 2.79x (3.3x faster). Its 6-bit packed scale has an
+   `if (sub < 4)` that blocks CSE across four inlined `FMT::dequant` calls.
+   For the branch-free formats (q2_K, q6_K) the compiler was already CSE-ing
+   the redundant scale decode, so the gain is ~5% or inside noise — q6_K
+   measured 2% slower, which is noise at this shape and not a regression worth
+   chasing.
+
+2. The in-GEMM path is the one that matters for serving regardless of the
+   single-tile ratio, because the dequant route's memory cost is prohibitive.
+   At the decode-shape K-split geometry q2_K in-GEMM is **13.76 vs 13.20
+   TFLOP/s** — it beats the dequant route outright while allocating nothing.
+
+Open questions: the golden shape is occupancy-bound, not decode-bound (128
+wavefronts on 304 CUs, ~43 GB/s effective of 5.3 TB/s peak), so the base-kernel
+ratios above understate the in-GEMM path. Next levers, in order: (a) port
+Metal's `dequant_into_shared` — a CTA cooperatively decodes a BN x BK tile into
+LDS with coalesced reads, which fixes the scattered 84-byte-strided per-lane
+loads that dominate q2_K; (b) instantiate the `moe_gemm_*` grouped GEMM for
+q2_K; (c) sweep realistic serving shapes (N=6144/2048, K=6144/2048) rather than
+the 512x4096 golden tile. The iq* codebook formats keep the generic 4-element
+fallback and were not specialized.
+
+Raw results: `perf/results/2026-07-26/qgemm-kquant-ingemm/make_test.txt`.
+
+## 2026-07-26: LDS-Staged k-quant Tile Decode (span fill) — LANDED (1.4-2.0x on ctaLDS)
+
+Status: landed. Port of QuixiCore-Metal's `dequant_into_shared` span fill into
+the CDNA3 multi-wave CTA/LDS qgemm tile.
+
+Current implementation: `stage_qgemm_cta_tile` in the new
+`kernels/quantization/qgemm/variants/rocm_cdna3/qgemm_kernels.cuh` (kernels
+split out of `qgemm.cu` so the golden harness and the shape bench share one
+definition — the harness keeps its `// ---- harness ----` half).
+
+The W fill was one scalar `FMT::dequant` per element: for a 16-wide K tile that
+re-decodes the block/sub-block scale 16x per row segment and issues 16 scattered
+byte reads. It now fills one 8-wide span per thread via `dequant8<FMT>` — one
+scale unpack per span, and the 8 packed weights a span needs are contiguous in
+the block, so the global read is a short burst. Bit-identical to the
+per-element fill (same decode, same fp32 op order).
+
+Current public route: unchanged; `qgemm_cta_lds` is still a bench/harness
+candidate, not the default. Routing is the open follow-up (see below).
+
+References inspected: `../QuixiCore-Metal/include/metal/ops/warp/register/tile/
+dequant.metal` (`dequant_into_shared`, SPANS_PER_ROW = BK/8) and
+`kernels/quantization/qgemm/qgemm.metal` (`qgemm_q2_K`), plus the prior
+2026-07-07 qgemm LDS entries.
+
+Correctness: `make test` -> ALL PASS (0 failures), 203 PASS lines, ctaLDS
+included. Raw: `perf/results/2026-07-26/qgemm-kquant-ingemm/make_test_after_lds.txt`.
+
+Baseline / experiment: MI300X gfx942, ROCm/HIP 7.2.53211, hipcc ROCm 7.2.4,
+`HIP_VISIBLE_DEVICES=0`, native HIP bench (`qgemm_q2k_bench.cu`, new), q2_K
+weights, fp16 X, fp32 accumulate, HIP events, 10 warmup / 50 iter median.
+Shapes are the GLM-5.2 projections. ctaLDS MT=4 NT=4, 256 threads.
+
+ctaLDS TFLOP/s, per-element fill vs 8-span fill:
+
+| M | N x K | per-element | 8-span | gain |
+|---|---|---|---|---|
+| 1024 | 2048 x 6144  | 33.98 | 46.64  | 1.37x |
+| 1024 | 6144 x 2048  | 44.75 | 83.56  | 1.87x |
+| 1024 | 6144 x 16384 | 42.11 | 83.65  | 1.99x |
+| 1024 | 16384 x 2048 | 62.37 | 99.39  | 1.59x |
+| 4096 | 2048 x 6144  | 55.24 | 94.80  | 1.72x |
+| 4096 | 6144 x 2048  | 58.69 | 101.83 | 1.74x |
+| 4096 | 6144 x 16384 | 59.15 | 86.59  | 1.46x |
+| 4096 | 16384 x 2048 | 66.81 | 105.86 | 1.58x |
+
+Decision: KEEP, well above the 8-10% complexity threshold, with a clear
+mechanism (scale decode 16x -> 2x per row segment; contiguous instead of
+scattered weight reads) and bit-identical output.
+
+Route shape (from the same bench, q2_K, x = time vs the fp16 upper bound on the
+same tile — below 1.0 means the quantized kernel beats a pure fp16 GEMM because
+it moves ~6x fewer weight bytes):
+
+| M | fragment | ksplit | ctaLDS |
+|---|---|---|---|
+| 64   | 1.25-1.82x | **1.12-1.73x** | 1.09-5.69x |
+| 256  | 1.72-1.82x | 1.60-1.83x | **0.42-2.29x** |
+| 1024 | 1.71-1.82x | 1.73-1.83x | **0.34-0.74x** |
+| 4096 | 1.66-1.76x | 1.67-1.77x | **0.31-0.39x** |
+
+At prefill the ctaLDS path reaches 86-106 TFLOP/s, 5.4x the fragment path and
+~3x faster than the fp16 GEMM on the same tile. At M=64 it is the wrong kernel
+(the CTA grid stops filling the device) and ksplit wins.
+
+Open questions / follow-ups: (a) wire the M threshold (~128) into a
+`qgemm_pick_route` alongside `qgemm_pick_nt`/`qgemm_pick_kchunk` and make it the
+public route; (b) apply the same span fill to `moe_gemm_gguf` (currently the
+register-fragment geometry only, which by the table above is the prefill
+loser); (c) MT/NT sweep — 4x4 was inherited, not tuned, and N=2048 K=6144 is
+consistently the weakest shape.
+
+Raw results: `perf/results/2026-07-26/qgemm-kquant-ingemm/q2k_shape_bench_span.txt`.
+
+## 2026-07-26: Attention Weight-Format Downgrade (q8_0 -> q5_K) — REJECTED
+
+Status: rejected. Hypothesis was wrong; recording it so it is not retried.
+
+Hypothesis: for GLM-5.2 the attention/projection tensors are q8_0 and account
+for ~56% of per-token decode weight traffic (14.4 of 25.6 GB, dominated by
+o_proj at 6144x16384 and q_b at 16384x2048). Decode is weight-bandwidth bound
+(arithmetic intensity ~6 FLOP/byte against an HBM roofline near 60), so
+requantizing those tensors to q5_K should cut ~35% of their bytes and buy
+roughly 20% end-to-end decode time.
+
+Correctness: not applicable — timing-only A/B; no routing or kernel changed.
+
+Baseline / experiment: MI300X gfx942, ROCm/HIP 7.2.53211, hipcc ROCm 7.2.4,
+`HIP_VISIBLE_DEVICES=0`, `qgemm_q2k_bench.out --formats`, K-split fragment path
+(the measured M<128 winner), fp16 X, fp32 accumulate, HIP events, 10 warmup /
+50 iter median. Random weight bytes: no k-quant decoder branches on weight
+values, only on column position, so this is timing-valid.
+
+o_proj (N=6144, K=16384):
+
+| format | bit/w | packed MB | M=16 ms | M=64 ms |
+|---|---|---|---|---|
+| q8_0 | 8.50 | 106.96 | **0.1433** | **0.5864** |
+| q6_K | 6.56 |  82.58 | 0.2288 | 0.8952 |
+| q5_K | 5.50 |  69.21 | 0.3020 | 1.1944 |
+| q4_K | 4.50 |  56.62 | 0.2613 | 1.0126 |
+
+Same ordering at q_b (16384x2048) and kv/gate (6144x2048): q5_K is 1.9-2.1x
+SLOWER than q8_0 in wall clock at M=16 while moving 35% fewer bytes.
+
+Decision: REJECT. Do not requantize attention below q8_0 for speed.
+
+Why the hypothesis failed: the roofline argument is about aggregate model
+traversal, but these kernels reach only 200-750 GB/s of the ~5.3 TB/s peak, so
+they are nowhere near bandwidth-bound at the kernel level — they are
+decode/latency bound. q8_0's decoder is a single scale multiply on an int8
+(`s * float(qs[i])`); q5_K adds a packed 6-bit sub-scale extraction with a
+branch plus a separate high-bit (qh) load per element. Fewer bytes at a much
+costlier decode is a net loss until the kernels approach the bandwidth roofline.
+Note q4_K beats q5_K (0.2613 vs 0.3020 ms) despite both having dequant4 — q5_K
+pays the extra qh load that q4_K does not.
+
+Corollary for the serving plan: kernel efficiency, not weight-byte count, is the
+current decode bottleneck. Byte-reduction work should be revisited only after
+the decode-path kernels get closer to the roofline.
+
+Open questions: this measures the MFMA GEMM path at M=16/64. True batch-1
+decode (M=1) runs the GEMV/MMVQ path in `kernels/quantization/qgemv`, whose
+per-format cost ratios were not measured here and could differ — though the
+mechanism (cheap q8_0 decode vs branchy k-quant decode) should hold or
+strengthen, since there is less MFMA work to hide the decode behind.
+
+Raw results: `perf/results/2026-07-26/qgemm-kquant-ingemm/format_ab_attention_shapes.txt`.
+
+### Addendum (same day): 4-bit formats incl. nvfp4 — also rejected for decode
+
+Extended the format A/B to q4_0, iq4_nl, mxfp4 and nvfp4. Every 4-bit format is
+slower in wall clock than q8_0 at the attention shapes, and the ordering tracks
+decoder complexity rather than byte count. o_proj (6144x16384), M=16:
+
+| format | bit/w | packed MB | ms | GB/s |
+|---|---|---|---|---|
+| q8_0   | 8.50 | 106.96 | **0.1434** | **745.7** |
+| q4_K   | 4.50 |  56.62 | 0.2589 | 218.7 |
+| q4_0   | 4.50 |  56.62 | 0.2833 | 199.9 |
+| mxfp4  | 4.25 |  53.48 | 0.2889 | 185.1 |
+| iq4_nl | 4.50 |  56.62 | 0.3356 | 168.7 |
+| nvfp4  | 4.50 |  56.62 | 0.3642 | 155.5 |
+
+nvfp4 moves 47% fewer bytes and takes 2.5x longer — its per-element e4m3
+block-scale decode is the costliest in the set.
+
+Scope limit, stated explicitly: this runs every format through the fp16 K=16
+MFMA path. It does NOT test nvfp4 decoded to fp8 through
+`v_mfma_f32_16x16x32_fp8_fp8` (measured separately at 1.98x the fp16 MFMA
+K-throughput, 2059 vs 1039 TFLOP/s). That 2x lands at prefill, where the kernel
+is MFMA-bound; at M=16 q8_0 reaches only 745 GB/s of the ~5.3 TB/s peak (14%),
+so nothing here is MFMA-bound and doubling MFMA issue would not move it.
+
+The governing fact is that the decode-path kernel leaves ~7x on the table
+against the bandwidth roofline, while any format swap is worth ~1.3x. Format
+choice is currently dominated by a kernel inefficiency. Fix the small-M kernel
+(span-staged staging at a geometry that still fills the device) before
+re-evaluating any format question — the ordering in this table could flip.
+
+Project decision (2026-07-26): stay on the antirez routed quant (q8_0
+attention + q2_K routed experts) for GLM-5.2 serving. No requantization.
