@@ -2609,3 +2609,51 @@ atomics. The next optimization lever is still an im2col-plus-MFMA or direct
 shared-tile convolution path for larger production shapes.
 
 Raw results: `perf/results/2026-07-26/phase12-conv-audio-final3/bench.txt`.
+
+## 2026-07-26: Vision Phase 13 - LANDED
+
+Status: landed.
+
+Current implementation: `kernels/vision/phase13_vision/variants/rocm_cdna3`.
+Current public route: Phase 13 operation entries in `.quixicore/kernels.yaml`
+from `extract_patches_2d` through `upscale_nearest_2d`.
+
+References inspected: CPU `vision/patch_ops_ref.cpp`,
+`vision/vision_ref.cpp`, `vision/conv_pool_ref.cpp`,
+`attention/vision_rope_ref.cpp`, and `utils/tensor_ops_ref.cpp`; Metal
+`vision/patch_merge` and `vision/edge_mlp`.
+
+Correctness: `make -C kernels/vision/phase13_vision/variants/rocm_cdna3 test`
+and archived `bench` both report `ALL PASS`. The harness has 22 checks covering
+NHWC/NTHWC patch extraction and projection, 2x2 patch merge layer norm,
+space-to-depth norm+linear, edge MLP, local-axis and Qwen/global-split vision
+RoPE, half-pixel and align-corners interpolation, factorized positions,
+relative-position helpers, window partition/unpartition, floor/ceil token
+pooling, destination-owned coordinate token pooling with exact masks, timestep
+embedding, and nearest upscaling.
+
+Baseline and experiments on MI300X gfx942, ROCm 7.2.4, HIP 7.2.53211,
+bare metal, command
+`HIP_VISIBLE_DEVICES=0 make -C kernels/vision/phase13_vision/variants/rocm_cdna3 bench`.
+Benchmarks used printed warmups/iterations; fast kernels use repeated launches
+per timing sample and report per-launch medians.
+
+| route / shape | baseline | candidate/current | decision |
+| --- | ---: | ---: | --- |
+| `extract_patches_2d`, fp32 NHWC B=2,H=W=32,C=8,KH=KW=3 | scalar 92.1686 ms | direct elementwise 0.0060 ms, 196.1 GB/s, 15318.87x | keep direct route |
+| `vision_patch_projection`, fp32 NHWC B=2,H=W=32,C=8,O=16,KH=KW=3 | scalar 229.5257 ms | direct output-owned 0.0130 ms, 0.4 TFLOP/s, 17623.89x | keep direct route |
+| `patch_merge_layer_norm`, fp32 NHWC B=2,H=W=32,C=16 | scalar 26.1815 ms | row-owned direct 0.0680 ms, 7.7 GB/s, 385.08x | keep row-owned route |
+| `space_to_depth_norm_linear`, fp32 NHWC B=2,H=W=32,C=8,O=16,block=2 | scalar 124.2001 ms | output-owned direct 0.0362 ms, 3429.21x | keep direct route |
+| `vision_rope_2d`, fp32 B=2,H=4,T=64,D=64 | scalar 2.7628 ms | pair-parallel route 0.0058 ms, 45.4 GB/s, 478.97x | keep pair-parallel route |
+| `window_partition`, fp32 NHWC H=65,W=67,C=8,window=8 | scalar 19.5503 ms | direct layout route 0.0056 ms, 59.1 GB/s, 3480.77x | keep direct route |
+| `pool_tokens_by_position`, fp32 B=2,tokens=256,C=16,out=128 | scalar 1.2343 ms, 3.4 GB/s | destination-owned scan 0.0910 ms, 46.1 GB/s, 13.57x | keep destination-owned route |
+| `edge_mlp_256x7`, fp32 B=1,L=8 | scalar 26.8263 ms | two-stage direct route 0.0807 ms, 332.50x | keep two-stage route |
+
+Decision: KEEP the Phase 13 ports. These are operation-level parity kernels,
+not final vision-transformer throughput kernels. The implementation preserves
+the CPU layouts and edge semantics first, then exposes independent patches,
+rows, pairs, windows, or destination buckets to CDNA3. `pool_tokens_by_position`
+intentionally scans from each output bucket to avoid unordered accumulation
+races.
+
+Raw results: `perf/results/2026-07-26/phase13-vision-final2/bench.txt`.

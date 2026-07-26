@@ -53,8 +53,8 @@ the kernel; a missing entry does not.
 | 10 | Training & distillation | 10 | 0 | 0 | **10** |
 | 11 | Elementwise & tensor-op surface | 42 | 0 | 0 | **42** |
 | 12 | Convolution & audio | 16 | 0 | 0 | **16** |
-| 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **25** | **0** | **153** |
+| 13 | Vision | 19 | 0 | 0 | **19** |
+| | **Total** | **178** | **6** | **0** | **172** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -470,27 +470,34 @@ aligned-corner interpolation, invalid-token zeroing, coordinate masks,
 local-axis/global-split RoPE, and partial ceil-mode pool windows. Depends on
 Phase 12's pooling primitives.
 
+2026-07-26 update: `kernels/vision/phase13_vision/variants/rocm_cdna3`
+landed all 19 Phase 13 rows. The standalone harness reports `ALL PASS` for 22
+checks covering NHWC/NTHWC patch extraction and projection, patch merge,
+space-to-depth projection, edge MLP, both vision RoPE layouts, interpolation
+modes, relative-position helpers, window partition/unpartition, token pooling,
+timestep embedding, and nearest upscaling.
+
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `extract_patches_2d` | `vision/patch_ops_ref.cpp` | — | planned |
-| `extract_patches_3d` | `vision/patch_ops_ref.cpp` | — | planned |
-| `vision_patch_projection` | `vision/patch_ops_ref.cpp` | — | planned |
-| `vision_patch_projection_3d` | `vision/patch_ops_ref.cpp` | — | planned |
-| `patch_merge_layer_norm` | `vision/vision_ref.cpp` | `vision/patch_merge` | planned |
-| `space_to_depth_norm_linear` | `vision/vision_ref.cpp` | `vision/patch_merge` | planned |
-| `edge_mlp_256x7` | `vision/vision_ref.cpp` | `vision/edge_mlp` | planned |
-| `vision_rope_2d` | `attention/vision_rope_ref.cpp` | — | planned |
-| `qwen_vision_rope_2d` | `attention/vision_rope_ref.cpp` | — | planned |
-| `interpolate_position_2d` | `vision/patch_ops_ref.cpp` | — | planned |
-| `factorized_position_2d` | `vision/patch_ops_ref.cpp` | — | planned |
-| `add_relative_position_2d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `get_relative_position` | `vision/conv_pool_ref.cpp` | — | planned |
-| `window_partition` | `vision/conv_pool_ref.cpp` | — | planned |
-| `window_unpartition` | `vision/conv_pool_ref.cpp` | — | planned |
-| `avg_pool2d_tokens` | `vision/patch_ops_ref.cpp` | — | planned |
-| `pool_tokens_by_position` | `vision/patch_ops_ref.cpp` | — | planned |
-| `timestep_embedding` | `vision/conv_pool_ref.cpp` | — | planned |
-| `upscale_nearest_2d` | `utils/tensor_ops_ref.cpp` | — | planned |
+| `extract_patches_2d` | `vision/patch_ops_ref.cpp` | — | **landed** |
+| `extract_patches_3d` | `vision/patch_ops_ref.cpp` | — | **landed** |
+| `vision_patch_projection` | `vision/patch_ops_ref.cpp` | — | **landed** |
+| `vision_patch_projection_3d` | `vision/patch_ops_ref.cpp` | — | **landed** |
+| `patch_merge_layer_norm` | `vision/vision_ref.cpp` | `vision/patch_merge` | **landed** |
+| `space_to_depth_norm_linear` | `vision/vision_ref.cpp` | `vision/patch_merge` | **landed** |
+| `edge_mlp_256x7` | `vision/vision_ref.cpp` | `vision/edge_mlp` | **landed** |
+| `vision_rope_2d` | `attention/vision_rope_ref.cpp` | — | **landed** |
+| `qwen_vision_rope_2d` | `attention/vision_rope_ref.cpp` | — | **landed** |
+| `interpolate_position_2d` | `vision/patch_ops_ref.cpp` | — | **landed** |
+| `factorized_position_2d` | `vision/patch_ops_ref.cpp` | — | **landed** |
+| `add_relative_position_2d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `get_relative_position` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `window_partition` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `window_unpartition` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `avg_pool2d_tokens` | `vision/patch_ops_ref.cpp` | — | **landed** |
+| `pool_tokens_by_position` | `vision/patch_ops_ref.cpp` | — | **landed** |
+| `timestep_embedding` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `upscale_nearest_2d` | `utils/tensor_ops_ref.cpp` | — | **landed** |
 
 ## Out Of Scope
 

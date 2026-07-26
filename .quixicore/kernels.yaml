@@ -66,6 +66,10 @@ families:
     status: partial
     paths:
       - kernels/audio
+  vision:
+    status: partial
+    paths:
+      - kernels/vision
   collectives:
     status: experimental
     paths:
@@ -805,6 +809,196 @@ operations:
       - name: rocm_cdna3
         status: implemented
         path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  extract_patches_2d:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 NHWC patch extraction route with zero padding and CPU patch order.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  extract_patches_3d:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 NTHWC temporal patch extraction route with zero padding.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  vision_patch_projection:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 NHWC patch projection using [O,KH,KW,C] weights and optional bias.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  vision_patch_projection_3d:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 NTHWC temporal patch projection using [O,KT,KH,KW,C] weights and optional bias.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  patch_merge_layer_norm:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 2x2 NHWC patch merge plus layer norm route, including odd-edge zero padding.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  space_to_depth_norm_linear:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 block space-to-depth, layer norm, and projection route with edge zero padding.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  edge_mlp_256x7:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 two-stage 256-feature, 7-class edge MLP route preserving CPU output layout.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  vision_rope_2d:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 local-axis 2D vision RoPE route with clamped position ids.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  qwen_vision_rope_2d:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 global-split Qwen 2D vision RoPE route with clamped position ids.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  interpolate_position_2d:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 bilinear position-table resize covering half-pixel and align-corners modes.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  factorized_position_2d:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 factorized X/Y position embedding route with invalid-token zeroing.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  add_relative_position_2d:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 2D relative-position attention-bias add route.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  get_relative_position:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 relative-position table expansion route.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  window_partition:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 NHWC window partition route with lower/right zero padding.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  window_unpartition:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 NHWC window unpartition route.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  avg_pool2d_tokens:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 NHWC token average pool route with floor and ceil output modes.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  pool_tokens_by_position:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 destination-owned token pooling route preserving CPU accumulation order and masks.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  timestep_embedding:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 diffusion timestep embedding route with odd-dimension zero tail.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
+
+  upscale_nearest_2d:
+    family: vision
+    status: implemented
+    path: kernels/vision/phase13_vision
+    notes: Phase 13 CHW nearest-neighbor upscale route.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/vision/phase13_vision/variants/rocm_cdna3
 
   qgemv:
     family: quantization
