@@ -716,6 +716,114 @@ operations:
         status: imported
         path: kernels/linear_attention/based/variants/rocm_cdna3
 
+  gated_linear_attention:
+    family: linear_attention
+    status: implemented
+    path: kernels/linear_attention/phase8_linear
+    notes: >-
+      Phase 8 fp32 GLA recurrent state update, preserving serial token order
+      while wave64 blocks own independent output/state columns.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/linear_attention/phase8_linear/variants/rocm_cdna3
+
+  rwkv_wkv6:
+    family: linear_attention
+    status: implemented
+    path: kernels/linear_attention/phase8_linear
+    notes: >-
+      Phase 8 fp32 RWKV6 WKV recurrence with time_first and per-token
+      time_decay; wave64 blocks own independent output/state columns.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/linear_attention/phase8_linear/variants/rocm_cdna3
+
+  rwkv_wkv7:
+    family: linear_attention
+    status: implemented
+    path: kernels/linear_attention/phase8_linear
+    notes: >-
+      Phase 8 fp32 RWKV7 row recurrence preserving the state_a update order
+      from the CPU reference.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/linear_attention/phase8_linear/variants/rocm_cdna3
+
+  gdn_short_conv:
+    family: linear_attention
+    status: implemented
+    path: kernels/linear_attention/phase8_linear
+    notes: >-
+      Phase 8 fp32 GDN short convolution with persistent history pool,
+      slot_mapping, optional initial state load, negative-slot zero output, and
+      optional SiLU.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/linear_attention/phase8_linear/variants/rocm_cdna3
+
+  gdn_qkv_prepare:
+    family: linear_attention
+    status: implemented
+    path: kernels/linear_attention/phase8_linear
+    notes: >-
+      Phase 8 fp32 GDN Q/K RMS preparation plus V copy with CPU default
+      q_scale/k_scale handling.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/linear_attention/phase8_linear/variants/rocm_cdna3
+
+  gdn_gate_beta:
+    family: linear_attention
+    status: implemented
+    path: kernels/linear_attention/phase8_linear
+    notes: >-
+      Phase 8 fp32 GDN gate/beta transform using stable softplus and sigmoid.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/linear_attention/phase8_linear/variants/rocm_cdna3
+
+  gdn_gated_rmsnorm:
+    family: linear_attention
+    status: implemented
+    path: kernels/linear_attention/phase8_linear
+    notes: >-
+      Phase 8 fp32 GDN gated RMSNorm over value-head rows with block-level
+      sum-of-squares reduction.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/linear_attention/phase8_linear/variants/rocm_cdna3
+
+  gdn_recurrence:
+    family: linear_attention
+    status: implemented
+    path: kernels/linear_attention/phase8_linear
+    notes: >-
+      Phase 8 fp32 varlen GDN recurrence with GQA head mapping, slot-mapped
+      state pool, and output/state verification.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/linear_attention/phase8_linear/variants/rocm_cdna3
+
+  linear_attention_unnormalized:
+    family: linear_attention
+    status: implemented
+    path: kernels/linear_attention/phase8_linear
+    notes: >-
+      Phase 8 unnormalized identity-feature linear attention, implemented as a
+      staged KV accumulation followed by Q@KV.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/linear_attention/phase8_linear/variants/rocm_cdna3
+
   flux:
     family: matmul
     status: imported

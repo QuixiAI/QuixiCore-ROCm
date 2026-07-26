@@ -2378,3 +2378,53 @@ matches FP32/FP16/BF16 storage semantics. The collectives are deliberately not
 RCCL replacements; they land the CPU root tensor operations on one device.
 
 Raw results: `perf/results/2026-07-26/phase7-stragglers-final/bench.txt`.
+
+## 2026-07-26: Linear Attention Phase 8 - LANDED
+
+Status: landed.
+
+Current implementation: `kernels/linear_attention/phase8_linear/variants/rocm_cdna3`.
+Current public route: Phase 8 operation entries in `.quixicore/kernels.yaml`:
+`gated_linear_attention`, `rwkv_wkv6`, `rwkv_wkv7`, `gdn_short_conv`,
+`gdn_qkv_prepare`, `gdn_gate_beta`, `gdn_gated_rmsnorm`, `gdn_recurrence`, and
+`linear_attention_unnormalized`.
+
+References inspected: CPU `linear_attention/llama_recurrent_ref.cpp`,
+`linear_attention/gdn_ref.cpp`, and
+`linear_attention/linear_attention_extended_ref.cpp`; Metal
+`linear_attention/gdn/gdn.metal` and
+`linear_attention/linear_attn/linear_attn.metal`; existing ROCm
+`kernels/linear_attention/variants/rocm_cdna3/gdn_kernels.cuh`.
+
+Correctness: `make -C kernels/linear_attention/phase8_linear/variants/rocm_cdna3 test`
+and archived `bench` both report `ALL PASS`. The harness has 17 checks covering
+GLA output/final state, RWKV6 output/final state, RWKV7 output/final state,
+unnormalized linear attention, GDN recurrence output/state, GDN short-conv
+output/state including a negative slot, GDN Q/K/V preparation with default
+NaN q_scale/k_scale handling, GDN gate/beta, and GDN gated RMSNorm.
+
+Baseline and experiments on MI300X gfx942, ROCm 7.2.4, HIP 7.2.53211,
+bare metal, command
+`HIP_VISIBLE_DEVICES=0 make -C kernels/linear_attention/phase8_linear/variants/rocm_cdna3 bench`.
+Benchmarks used printed warmups/iterations; fast kernels use repeated launches
+per timing sample and report per-launch medians.
+
+| route / shape | baseline | candidate/current | decision |
+| --- | ---: | ---: | --- |
+| `gated_linear_attention`, fp32 S=8,T=16,H=4,D=64 | task-serial 18.9735 ms | wave64 column route 0.0141 ms, 0.7 TFLOP/s, 1349.70x | keep wave64 |
+| `rwkv_wkv6`, fp32 S=8,T=16,H=4,D=64 | task-serial 10.7257 ms | wave64 column route 0.0147 ms, 0.9 TFLOP/s, 729.48x | keep wave64 |
+| `rwkv_wkv7`, fp32 S=8,T=16,H=4,D=64 | task-serial 22.6561 ms | wave64 row route 0.0178 ms, 0.9 TFLOP/s, 1270.82x | keep wave64 |
+| `linear_attention_unnormalized`, fp32 B=4,H=4,N=32,D=32 | direct scalar 86.6738 ms | staged KV + Q@KV 0.0194 ms, 0.1 TFLOP/s, 4458.58x | keep staged route |
+| `gdn_recurrence`, fp32 R=8,Hk=2,Hv=4,Dk=64,Dv=64 | request-serial 117.8900 ms | wave64 row route 0.0180 ms, 0.5 TFLOP/s, 6533.73x | keep wave64 |
+| `gdn_short_conv`, fp32 R=64,C=512,K=4 | request-serial 1.7052 ms, 1.1 GB/s | channel-parallel 0.0083 ms, 221.2 GB/s, 204.67x | keep channel route |
+| `gdn_qkv_prepare`, fp32 tokens=8192,Hk=4,Hv=8,Dk=64,Dv=64 | token-serial 0.2986 ms, 224.8 GB/s | block RMS + V copy 0.0494 ms, 1358.9 GB/s, 6.05x | keep parallel route |
+| `gdn_gate_beta`, fp32 tokens=65536,Hv=8 | token-serial 0.1555 ms, 53.9 GB/s | elementwise 0.0057 ms, 1462.3 GB/s, 27.11x | keep elementwise route |
+| `gdn_gated_rmsnorm`, fp32 rows=32768,Dv=128 | row-serial 0.3097 ms, 216.7 GB/s | block RMS 0.0259 ms, 2592.0 GB/s, 11.96x | keep block route |
+
+Decision: KEEP the Phase 8 ports. The kernels preserve serial token order where
+recurrence requires it, but split independent rows, columns, channels, or
+normalization reductions across CDNA3 wave64/block work. The GDN ports are
+fp32-only operation-level parity; FP16/BF16 storage wrappers are explicit
+non-ports until a shared floating storage dispatcher exists in the ROCm backend.
+
+Raw results: `perf/results/2026-07-26/phase8-linear-final2/bench.txt`.

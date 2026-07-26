@@ -48,13 +48,13 @@ the kernel; a missing entry does not.
 | 5 | BaseQ canonical family | 9 | 0 | 0 | **9** |
 | 6 | Quant authoring & quantized embedding | 14 | 0 | 0 | **14** |
 | 7 | Sampling & embedding stragglers | 6 | 0 | 0 | **6** |
-| 8 | Linear attention | 9 | 9 | 0 | 0 |
+| 8 | Linear attention | 9 | 0 | 0 | **9** |
 | 9 | State-space & hyper-connections | 6 | 6 | 0 | 0 |
 | 10 | Training & distillation | 10 | 10 | 0 | 0 |
 | 11 | Elementwise & tensor-op surface | 42 | 42 | 0 | 0 |
 | 12 | Convolution & audio | 16 | 16 | 0 | 0 |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **113** | **0** | **65** |
+| | **Total** | **178** | **104** | **0** | **74** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -300,22 +300,30 @@ under `perf/results/2026-07-26/phase7-stragglers-final/`.
 
 ## Phase 8 — Linear Attention (9)
 
-RWKV6/7 are new math with no ROCm precedent — derive from the CPU reference and
+Landed in `kernels/linear_attention/phase8_linear/variants/rocm_cdna3`.
+RWKV6/7 are new math with no ROCm precedent; derive from the CPU reference and
 validate against an fp64 oracle before any tiling. GDN preserves functional FP32
 state/history pools, slot mapping, D64/D128 heads, and MQA/GQA mapping; aliased
 slots retain request order.
 
+2026-07-26 update: the Phase 8 harness reports `ALL PASS` for GLA, RWKV6,
+RWKV7, unnormalized linear attention, GDN recurrence output/state, GDN short
+convolution output/state, QKV preparation, gate/beta, and gated RMSNorm. The
+focused benchmark keeps wave64 row/channel routes and the staged KV route for
+unnormalized linear attention, with raw output archived under
+`perf/results/2026-07-26/phase8-linear-final2/`.
+
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `gated_linear_attention` | `linear_attention/linear_attention_extended_ref.cpp` | — | planned |
-| `rwkv_wkv6` | `linear_attention/llama_recurrent_ref.cpp` | — | planned |
-| `rwkv_wkv7` | `linear_attention/llama_recurrent_ref.cpp` | — | planned |
-| `gdn_short_conv` | `linear_attention/gdn_ref.cpp` | `linear_attention/gdn` | planned |
-| `gdn_qkv_prepare` | `linear_attention/gdn_ref.cpp` | `linear_attention/gdn` | planned |
-| `gdn_gate_beta` | `linear_attention/gdn_ref.cpp` | `linear_attention/gdn` | planned |
-| `gdn_gated_rmsnorm` | `linear_attention/gdn_ref.cpp` | `linear_attention/gdn` | planned |
-| `gdn_recurrence` (varlen) | `linear_attention/gdn_ref.cpp` | `linear_attention/gdn` | planned |
-| `linear_attention_unnormalized` | `linear_attention/linear_attention_ref.cpp` | `linear_attention/linear_attn` | planned |
+| `gated_linear_attention` | `linear_attention/llama_recurrent_ref.cpp` | — | **landed** |
+| `rwkv_wkv6` | `linear_attention/llama_recurrent_ref.cpp` | — | **landed** |
+| `rwkv_wkv7` | `linear_attention/llama_recurrent_ref.cpp` | — | **landed** |
+| `gdn_short_conv` | `linear_attention/gdn_ref.cpp` | `linear_attention/gdn` | **landed** |
+| `gdn_qkv_prepare` | `linear_attention/gdn_ref.cpp` | `linear_attention/gdn` | **landed** |
+| `gdn_gate_beta` | `linear_attention/gdn_ref.cpp` | `linear_attention/gdn` | **landed** |
+| `gdn_gated_rmsnorm` | `linear_attention/gdn_ref.cpp` | `linear_attention/gdn` | **landed** |
+| `gdn_recurrence` (varlen) | `linear_attention/gdn_ref.cpp` | `linear_attention/gdn` | **landed** |
+| `linear_attention_unnormalized` | `linear_attention/linear_attention_extended_ref.cpp` | `linear_attention/linear_attn` | **landed** |
 
 ## Phase 9 — State-Space And Hyper-Connections (6)
 
