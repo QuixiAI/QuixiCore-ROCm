@@ -2704,3 +2704,71 @@ routes are correctness-first direct ports; broader GGUF dispatch and MFMA
 prefill specialization remain follow-up optimization work.
 
 Raw results: `perf/results/2026-07-26/phase2-quant-decode-final3/bench.txt`.
+
+## 2026-07-26: Recent Metal Operation Parity - LANDED
+
+Status: landed.
+
+Current implementation: exact CDNA3 ports for the latest Metal operation IDs:
+`attn_fwd_sg_d256`, `mean_pool_rms_l2`, `rms_norm_residual_next`,
+`qk_norm_rope_kv_f16`, `qgemv_q4_0_f32_up_gate_gelu`,
+`qgemv_q4_0_f32_up_gate`, and `qgemv_q4_0_f32_qkv`.
+
+Current public route: `.quixicore/kernels.yaml` entries pointing to
+`kernels/attention/attn_fwd_sg/variants/rocm_cdna3`,
+`kernels/serving/mean_pool_rms_l2/variants/rocm_cdna3`,
+`kernels/norms/rms_norm_residual_next/variants/rocm_cdna3`,
+`kernels/norms/qk_norm_rope/variants/rocm_cdna3`, and
+`kernels/quantization/qgemv_fused/variants/rocm_cdna3`. The same manifest pass
+also added Metal-name aliases for older landed grouped harness coverage:
+`decode_cache_attention`, `attn_decode_bh`, `decode_linear_epilogue`,
+`decode_swiglu`, `lm_head_masked`, `lm_head_candidates`, and
+`lm_head_beam_advance`.
+
+References inspected: `../QuixiCore-Metal/kernels/{attention/attn_fwd_sg,
+serving/mean_pool_rms_l2,norms/rms_norm_residual_next,norms/qk_norm_rope,
+quantization/qgemv_fused}`, Metal PyTorch-MPS tests, existing ROCm
+`gqa_swa`, `pool_mean_rms_l2`, `rms_residual_next`, `qk_norm_rope`,
+`qgeglu`, `qkv_proj_fused`, `attn_composites`, `decode_epilogues`, and
+`lm_head` harnesses.
+
+Correctness: archived `bench` runs report `ALL PASS` on MI300X. Coverage:
+`attn_fwd_sg_d256` 21 fp32-output checks over MQA/GQA/MHA, full attention, and
+symmetric windows; `mean_pool_rms_l2` 15 bf16-output checks over
+M in {1,37,128,1024} and D in {256,512,768,1024}; `rms_norm_residual_next`
+29 bf16-output checks over D in {256,512,768,1024}; `qk_norm_rope_kv_f16`
+43 checks over D in {64,128,256}, split/interleaved RoPE, Gemma mode, bf16 Q,
+and fp16 K/V; `qgemv_fused` 20 fp32 checks over the Metal Q4_0 fused GEMV
+shape set. Oracles are fp64 host references over the public storage layouts.
+
+Baseline and experiments on MI300X gfx942, ROCm 7.2.4, HIP 7.2.53211,
+bare metal, no torch/framework linkage. Fast kernels batch repeated launches
+per timing sample and report per-launch medians.
+
+| route / shape | baseline | candidate/current | decision |
+| --- | ---: | ---: | --- |
+| `attn_fwd_sg_d256`, fp32 Q/O fp16 KV T=256,Hq=4,Hkv=2,D=256,full | scalar query/head 3.4993 ms | block-row online softmax 0.2222 ms, 1.2 TFLOP/s, 15.75x | keep block-row route |
+| `attn_fwd_sg_d256`, same, window=64 | scalar query/head 0.9430 ms | block-row online softmax 0.0584 ms, 1.2 TFLOP/s, 16.16x | keep block-row route |
+| `mean_pool_rms_l2`, bf16 M=1024,D=768 | scalar one-thread vector 88.6593 ms | wave64 pooled-vector 0.1828 ms, 8.6 GB/s, 484.92x | keep wave64 route |
+| `mean_pool_rms_l2`, bf16 M=1024,D=1024 | scalar one-thread vector 123.1247 ms | wave64 pooled-vector 0.2165 ms, 9.7 GB/s, 568.64x | keep wave64 route |
+| `rms_norm_residual_next`, bf16 M=4096,D=768 | scalar row 0.1929 ms, 130.5 GB/s | wave64 row 0.0073 ms, 3440.2 GB/s, 26.36x | keep wave64 row route |
+| `rms_norm_residual_next`, bf16 M=4096,D=1024 | scalar row 0.2578 ms, 130.2 GB/s | wave64 row 0.0087 ms, 3869.1 GB/s, 29.71x | keep wave64 row route |
+| `qk_norm_rope_kv_f16`, bf16/fp16 T=4096,HT=8,D=128,interleaved | scalar row 0.1227 ms, 136.7 GB/s | wave/block row 0.0247 ms, 679.9 GB/s, 4.97x | keep wave/block route |
+| `qk_norm_rope_kv_f16`, bf16/fp16 T=4096,HT=8,D=256,Gemma | scalar row 0.2730 ms, 122.9 GB/s | wave/block row 0.0266 ms, 1262.2 GB/s, 10.27x | keep wave/block route |
+| `qgemv_q4_0_f32_up_gate_gelu`, N=1152,K=768 | scalar row 0.0242 ms | wave64 row 0.0040 ms, 0.9 TFLOP/s, 6.07x | keep wave64 row route |
+| `qgemv_q4_0_f32_up_gate`, N=1152,K=768 | scalar row 0.0129 ms | wave64 row 0.0035 ms, 1.0 TFLOP/s, 3.71x | keep wave64 row route |
+| `qgemv_q4_0_f32_qkv`, Nq=768,Nkv=256,K=768 | scalar row 0.0126 ms | wave64 row 0.0045 ms, 0.4 TFLOP/s, 2.82x | keep wave64 row route |
+
+Decision: KEEP all recent Metal parity ports. The new implementations are
+correctness-first CDNA3 routes with focused scalar-vs-parallel measurements;
+they close exact API/dtype gaps that were not covered by older similarly named
+ROCm kernels. Follow-ups: MFMA-tile `attn_fwd_sg_d256`, vectorize Q4_0 block
+loads for qgemv fused, and add a multi-wave pooling reduction for long single
+sequences.
+
+Raw results:
+`perf/results/2026-07-26/metal-recent-attn_fwd_sg_d256-batched/bench.txt`,
+`perf/results/2026-07-26/metal-recent-mean_pool_rms_l2/bench.txt`,
+`perf/results/2026-07-26/metal-recent-rms_norm_residual_next-batched/bench.txt`,
+`perf/results/2026-07-26/metal-recent-qk_norm_rope_kv_f16-batched/bench-kv-f16.txt`,
+and `perf/results/2026-07-26/metal-recent-qgemv_fused-batched2/bench.txt`.

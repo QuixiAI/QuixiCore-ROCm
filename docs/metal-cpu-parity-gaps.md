@@ -7,20 +7,20 @@ to close them. It is the counterpart to
 already-complete CUDA port.
 
 The CUDA tracker is not sufficient for parity: `QuixiCore-CUDA` publishes only
-family-level metadata, while Metal publishes 56 operation-level entries and CPU
-publishes ~290 public symbols across `include/quixicore_cpu/`. The gap below is
-what the CUDA port never covered because CUDA never published it.
+family-level metadata, while Metal publishes backend-specific operation entries
+and CPU publishes ~290 public symbols across `include/quixicore_cpu/`. The gap
+below is what the CUDA port never covered because CUDA never published it.
 
-Inventory date: 2026-07-25. Sources compared:
+Inventory date: 2026-07-26. Sources compared:
 
-- `../QuixiCore-Metal/kernels/**` (68 kernel directories) and
-  `../QuixiCore-Metal/.quixicore/kernels.yaml`
+- `../QuixiCore-Metal/kernels/**` (71 kernel directories) and
+  `../QuixiCore-Metal/.quixicore/kernels.yaml` (18 manifest operations)
 - `../QuixiCore-CPU/include/quixicore_cpu/*.h` and `../QuixiCore-CPU/kernels/**`
 - `../QuixiCore-CPU/parity/sibling_operations.tsv` and
   `../QuixiCore-CPU/docs/sibling-port-matrix.md`
 - This repo's ~250 `__global__` entry points and `.quixicore/kernels.yaml`
 
-**Total: 178 kernels in 13 phases.** An earlier estimate of ~150 was a
+**Total: 185 kernels in 14 phases.** An earlier estimate of ~150 was a
 group-level approximation; the per-kernel enumeration below is exact and
 supersedes it. The largest single correction is the elementwise/tensor-op
 surface, which is 42 operations rather than the ~35 estimated.
@@ -54,7 +54,8 @@ the kernel; a missing entry does not.
 | 11 | Elementwise & tensor-op surface | 42 | 0 | 0 | **42** |
 | 12 | Convolution & audio | 16 | 0 | 0 | **16** |
 | 13 | Vision | 19 | 0 | 0 | **19** |
-| | **Total** | **178** | **0** | **0** | **178** |
+| 14 | Recent Metal additions | 7 | 0 | 0 | **7** |
+| | **Total** | **185** | **0** | **0** | **185** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -508,9 +509,33 @@ timestep embedding, and nearest upscaling.
 | `timestep_embedding` | `vision/conv_pool_ref.cpp` | — | **landed** |
 | `upscale_nearest_2d` | `utils/tensor_ops_ref.cpp` | — | **landed** |
 
+## Phase 14 — Recent Metal Additions (7)
+
+This phase tracks the active Metal development discovered on 2026-07-26 after
+the original 178-kernel parity close-out. These are exact Metal manifest
+operation IDs, not broad family aliases. The ROCm manifest was also updated with
+older Metal public-name aliases that were already covered by landed ROCm grouped
+harnesses: `decode_cache_attention`, `attn_decode_bh`,
+`decode_linear_epilogue`, `decode_swiglu`, `lm_head_masked`,
+`lm_head_candidates`, and `lm_head_beam_advance`.
+
+2026-07-26 update: the seven new operation rows landed under exact CDNA3
+harnesses. Raw benchmark output is archived under
+`perf/results/2026-07-26/metal-recent-*/`.
+
+| Kernel | Reference | Metal source | Status |
+| --- | --- | --- | --- |
+| `attn_fwd_sg_d256` | fp64 attention oracle | `attention/attn_fwd_sg` | **landed** |
+| `mean_pool_rms_l2` | fp64 mean/RMS/L2 oracle | `serving/mean_pool_rms_l2` | **landed** |
+| `rms_norm_residual_next` | fp64 residual/RMS oracle | `norms/rms_norm_residual_next` | **landed** |
+| `qk_norm_rope_kv_f16` | fp64 QK/RoPE split-store oracle | `norms/qk_norm_rope` | **landed** |
+| `qgemv_q4_0_f32_up_gate_gelu` | fp64 Q4_0 dequant GEMV oracle | `quantization/qgemv_fused` | **landed** |
+| `qgemv_q4_0_f32_up_gate` | fp64 Q4_0 dequant GEMV oracle | `quantization/qgemv_fused` | **landed** |
+| `qgemv_q4_0_f32_qkv` | fp64 Q4_0 dequant GEMV oracle | `quantization/qgemv_fused` | **landed** |
+
 ## Out Of Scope
 
-- **CDNA4 (gfx950) variants.** These 178 kernels land CDNA3-only. MI300X is the
+- **CDNA4 (gfx950) variants.** These 185 kernels land CDNA3-only. MI300X is the
   available hardware and the perf gate forbids committing an unmeasured CDNA4
   claim. The resulting CDNA3/CDNA4 variant gap is tracked separately.
 - **A unified public API header.** ROCm keeps the standalone kernel + harness
