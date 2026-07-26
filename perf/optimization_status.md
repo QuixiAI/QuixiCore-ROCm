@@ -1599,6 +1599,72 @@ sdot4; split-K over the context with `merge_attn_states`; vectorized code loads.
 
 Raw results: perf/results/2026-07-25/serving-kv_cache_q8_0/
 
+## 2026-07-26: matmul-decode_epilogues Phase 3 CPU/Metal parity
+
+Status: landed.
+
+Current implementation: `kernels/matmul/decode_epilogues/variants/rocm_cdna3`.
+Current public route: `.quixicore/kernels.yaml` operations `decode_linear`,
+`decode_linear_residual`, `decode_linear_q8`,
+`decode_linear_epilogue_dense`, `decode_swiglu_dense`,
+`gemm_gate_residual`, `grouped_gemm`, `lora_apply_direct_f16`, and
+`complex_gemm`.
+
+References inspected: `../QuixiCore-CPU/kernels/matmul/matmul_extended_ref.cpp`,
+`../QuixiCore-CPU/kernels/matmul/lora_ref.cpp`,
+`../QuixiCore-CPU/kernels/matmul/dense_gemm_ref.cpp`,
+`../QuixiCore-Metal/kernels/matmul/decode_linear/decode_linear.metal`,
+`../QuixiCore-Metal/kernels/matmul/cmplx_matmul/cmplx_matmul.metal`,
+`kernels/common/cdna3_harness.cuh`.
+
+Correctness: **ALL PASS** on MI300X. The standalone harness checks 13 result
+lines against fp64 or format-aware host oracles:
+`decode_linear` fp32/bf16, `decode_linear_residual` fp32,
+`decode_linear_q8` q8_0 fp32, `decode_linear_epilogue_dense` fp16,
+`decode_linear_epilogue_packed` q8_0 fp32,
+`decode_swiglu_dense` bf16, `decode_swiglu_packed` q8_0 fp32,
+`gemm_gate_residual` fp32, `grouped_gemm` fp32,
+`lora_apply_direct_f16` fp32, and complex GEMM real/imag fp32.
+Tolerances: harness `Tol::fp32`, `bf16_output`, and
+`fp16_output`; q8_0 reference dequantizes the packed bytes and compares the
+actual quantized contract, not the pre-quantized float weights.
+
+Baseline 1: scalar one-thread-per-output decode residual route,
+rows=64, input_dim=4096, output_dim=2048, fp32, optional bias+residual enabled.
+Median 2.7513 ms, 0.4 TFLOP/s, min 2.7294 ms, max 2.7700 ms, spread 1.01x.
+
+Experiment 1: one factor changed: split each output dot product across one
+64-lane CDNA3 wavefront and reduce with `qc::wave_reduce_sum`. Candidate median
+0.2795 ms, 3.8 TFLOP/s, min 0.2749 ms, max 0.2952 ms, spread 1.07x,
+**9.84x** faster than the scalar baseline. Keep wave64 for decode epilogues.
+
+Baseline 2: scalar one-thread-per-output dense `grouped_gemm`, groups=8,
+M=64, N=512, K=2048, fp32. Median 0.4731 ms, 2.3 TFLOP/s,
+min 0.4710 ms, max 0.4881 ms, spread 1.04x.
+
+Experiment 2: same wave64 split-dot lever for grouped GEMM. Candidate median
+3.0423 ms, 0.4 TFLOP/s, min 2.9285 ms, max 3.1014 ms, spread 1.06x,
+**0.16x** the scalar baseline. Reject wave64 for grouped GEMM and keep scalar.
+
+Environment:
+  GPU: AMD Instinct MI300X (gfx942), device index 0
+  ROCm: 7.2.4   HIP: 7.2.53211-97f5574fe2
+  Container: bare metal (no container)
+  Commit: 0519f214 (working tree dirty)
+  Command: `HIP_VISIBLE_DEVICES=0 make -C kernels/matmul/decode_epilogues/variants/rocm_cdna3 bench`
+  Warmups/iterations: correctness once, performance w10/i50 with HIP-event median.
+
+Decision: **KEEP** the wave64 decode implementation and **REJECT** the same
+lever for grouped GEMM. Decode is latency-shaped and benefits from a wavefront
+per output; grouped GEMM's tile shape is better served by the scalar
+one-thread-per-output route until it is replaced by a real MFMA/LDS design.
+
+Open questions: generic packed epilogues for `q4_0`, `q6_K`, `mxfp8`,
+`nvfp4`, and `mxfp4`; MFMA/LDS dense prefill route if these decode epilogues
+are ever routed for large batches.
+
+Raw results: `perf/results/2026-07-26/matmul-decode_epilogues-phase3-final/`.
+
 ## 2026-07-26: In-GEMM k-quant Decode (dequant4 MFMA fragment) — LANDED
 
 Status: landed. The 256-superblock k-quants can now run the qgemm fragment path

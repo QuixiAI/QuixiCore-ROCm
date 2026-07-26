@@ -327,6 +327,119 @@ operations:
         status: implemented
         path: kernels/matmul/gemm_staged/variants/rocm_cdna3
 
+  decode_linear:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/decode_epilogues
+    notes: >-
+      Phase 3 CPU/Metal parity decode projection surface. Covers dense
+      decode_linear, decode_linear_residual, and Q8_0 decode_linear_q8 with a
+      shared CDNA3 wave64 dot kernel and standalone fp64/q8_0 host oracles.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/decode_epilogues/variants/rocm_cdna3
+
+  decode_linear_residual:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/decode_epilogues
+    notes: >-
+      Residual decode projection from CPU matmul_extended_ref, sharing the
+      Phase 3 wave64 decode implementation.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/decode_epilogues/variants/rocm_cdna3
+
+  decode_linear_q8:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/decode_epilogues
+    notes: >-
+      Decode projection over canonical GGUF q8_0 packed weights
+      `{fp16 scale, int8 codes[32]}` with optional bias, GELU, and residual.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/decode_epilogues/variants/rocm_cdna3
+
+  decode_linear_epilogue_dense:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/decode_epilogues
+    notes: >-
+      Dense decode-linear epilogue with optional bias, activation, and
+      residual. Q8_0 packed subpath is covered in the harness, while generic
+      packed q4/q6/MX/NV epilogues remain planned.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/decode_epilogues/variants/rocm_cdna3
+
+  decode_swiglu_dense:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/decode_epilogues
+    notes: >-
+      Dense two-projection SwiGLU decode epilogue. Q8_0 packed subpath is
+      checked by the same harness; generic packed formats remain planned.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/decode_epilogues/variants/rocm_cdna3
+
+  gemm_gate_residual:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/decode_epilogues
+    notes: >-
+      CPU matmul_extended_ref gemm_gate_residual contract: x@weight plus
+      optional bias, per-output gate, and residual.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/decode_epilogues/variants/rocm_cdna3
+
+  grouped_gemm:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/decode_epilogues
+    notes: >-
+      Dense CPU grouped_gemm contract: A[groups,M,K] @ B[groups,K,N] ->
+      C[groups,M,N]. The scalar per-output CDNA3 route is kept after rejecting
+      a wave64 split-dot candidate on the recorded Phase 3 benchmark.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/decode_epilogues/variants/rocm_cdna3
+
+  lora_apply_direct_f16:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/decode_epilogues
+    notes: >-
+      Direct FP16-adapter LoRA projection matching CPU storage rounding:
+      low-rank intermediate rounded to FP16, then adapter-B product rounded
+      to FP16 before base plus scale.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/decode_epilogues/variants/rocm_cdna3
+
+  complex_gemm:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/decode_epilogues
+    notes: >-
+      Public planar complex GEMM promotion for real/imaginary float inputs and
+      outputs. Implemented as a correctness-first wave64 scalar dot product;
+      MFMA complex tiling remains a future optimization.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/decode_epilogues/variants/rocm_cdna3
+
   qgemm:
     family: quantization
     status: optimized

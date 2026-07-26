@@ -43,7 +43,7 @@ the kernel; a missing entry does not.
 | 0 | Harness infrastructure | — | — | — | done |
 | 1 | Attention & RoPE variants | 13 | 0 | 0 | **13** |
 | 2 | Quantized KV-cache codecs | 17 | 13 | 0 | 4 |
-| 3 | Dense matmul epilogues | 10 | 10 | 0 | 0 |
+| 3 | Dense matmul epilogues | 10 | 2 | 0 | 8 |
 | 4 | MoE completeness | 7 | 7 | 0 | 0 |
 | 5 | BaseQ canonical family | 9 | 9 | 0 | 0 |
 | 6 | Quant authoring & quantized embedding | 14 | 14 | 0 | 0 |
@@ -54,7 +54,7 @@ the kernel; a missing entry does not.
 | 11 | Elementwise & tensor-op surface | 42 | 42 | 0 | 0 |
 | 12 | Convolution & audio | 16 | 16 | 0 | 0 |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **161** | **0** | **17** |
+| | **Total** | **178** | **153** | **0** | **25** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -158,21 +158,28 @@ reuse it for qgemm and flux.
 
 ROCm's `cmplx_matmul` currently exists only inside
 `kernels/linear_attention/variants/rocm_cdna3/tm_linattn_kernels.cuh`; this
-phase promotes it to a public `kernels/matmul/cmplx_matmul/` operation.
+phase promotes it to a public Phase 3 matmul operation.
+
+2026-07-26 update: `kernels/matmul/decode_epilogues/variants/rocm_cdna3`
+landed the dense decode/epilogue, Q8_0 decode, SwiGLU dense, gate/residual,
+dense grouped GEMM, LoRA-F16, and complex GEMM contracts with a shared-harness
+oracle and scalar-vs-wave64 optimization runs. The Q8_0 packed subpaths are
+exercised under `decode_linear_q8`; the generic packed epilogue rows remain planned until
+`q4_0`, `q6_K`, `mxfp8`, `nvfp4`, and `mxfp4` have host oracles.
 
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `decode_linear` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | planned |
-| `decode_linear_residual` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | planned |
-| `decode_linear_q8` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | planned |
-| `decode_linear_epilogue_dense` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | planned |
+| `decode_linear` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | **landed** |
+| `decode_linear_residual` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | **landed** |
+| `decode_linear_q8` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | **landed** |
+| `decode_linear_epilogue_dense` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | **landed** |
 | `decode_linear_epilogue_packed` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | planned |
-| `decode_swiglu_dense` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | planned |
+| `decode_swiglu_dense` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | **landed** |
 | `decode_swiglu_packed` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | planned |
-| `gemm_gate_residual` | `matmul/matmul_extended_ref.cpp` | `matmul/gemm_v3` | planned |
-| `grouped_gemm` (dense) | `matmul/dense_gemm_ref.cpp` | — | planned |
-| `lora_apply_direct_f16` | `matmul/lora_ref.cpp` | — | planned |
-| `complex_gemm` (promote to public op) | `matmul/matmul_extended_ref.cpp` | `matmul/cmplx_matmul` | planned |
+| `gemm_gate_residual` | `matmul/matmul_extended_ref.cpp` | `matmul/gemm_v3` | **landed** |
+| `grouped_gemm` (dense) | `matmul/dense_gemm_ref.cpp` | — | **landed** |
+| `lora_apply_direct_f16` | `matmul/lora_ref.cpp` | — | **landed** |
+| `complex_gemm` (promote to public op) | `matmul/matmul_extended_ref.cpp` | `matmul/cmplx_matmul` | **landed** |
 
 > The table lists 11 rows because `complex_gemm` is a promotion of existing
 > in-repo code rather than a new kernel; it is counted once in the phase total
