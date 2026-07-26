@@ -47,14 +47,14 @@ the kernel; a missing entry does not.
 | 4 | MoE completeness | 7 | 0 | 0 | **7** |
 | 5 | BaseQ canonical family | 9 | 0 | 0 | **9** |
 | 6 | Quant authoring & quantized embedding | 14 | 0 | 0 | **14** |
-| 7 | Sampling & embedding stragglers | 6 | 6 | 0 | 0 |
+| 7 | Sampling & embedding stragglers | 6 | 0 | 0 | **6** |
 | 8 | Linear attention | 9 | 9 | 0 | 0 |
 | 9 | State-space & hyper-connections | 6 | 6 | 0 | 0 |
 | 10 | Training & distillation | 10 | 10 | 0 | 0 |
 | 11 | Elementwise & tensor-op surface | 42 | 42 | 0 | 0 |
 | 12 | Convolution & audio | 16 | 16 | 0 | 0 |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **119** | **0** | **59** |
+| | **Total** | **178** | **113** | **0** | **65** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -278,18 +278,25 @@ the reduction and packing kernels, with raw output archived under
 
 ## Phase 7 — Sampling And Embedding Stragglers (6)
 
-Extends `kernels/serving/variants/rocm_cdna3/logits_proc_test.cu`.
+Landed in `kernels/sampling/phase7_stragglers/variants/rocm_cdna3`.
 `logits_softcap` is the **final-logit** softcap and is a distinct operation from
 attention score capping.
 
+2026-07-26 update: the Phase 7 harness reports `ALL PASS` for stable
+top-k/top-p probability renormalization, final-logit softcap, FP32/FP16/BF16
+token+type embedding lookup, and CPU root-collective `broadcast`/`reduce_sum`.
+The collectives here are the CPU tensor contracts; multi-GPU transport remains
+covered by the existing RCCL collectives tree. Raw benchmark output is archived
+under `perf/results/2026-07-26/phase7-stragglers-final/`.
+
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `top_k_renorm` | `sampling/transforms_ref.cpp` | `sampling/sampling` | planned |
-| `top_p_renorm` | `sampling/transforms_ref.cpp` | `sampling/sampling` | planned |
-| `logits_softcap` | `sampling/transforms_ref.cpp` | `sampling/sampling` | planned |
-| `embedding_lookup_types` | `serving/serving_ref.cpp` | `serving/embedding` | planned |
-| `broadcast` | `collectives/collectives_ref.cpp` | — | planned |
-| `reduce_sum` (collective) | `collectives/collectives_ref.cpp` | — | planned |
+| `top_k_renorm` | `sampling/transforms_ref.cpp` | `sampling/sampling` | **landed** |
+| `top_p_renorm` | `sampling/transforms_ref.cpp` | `sampling/sampling` | **landed** |
+| `logits_softcap` | `sampling/transforms_ref.cpp` | `sampling/sampling` | **landed** |
+| `embedding_lookup_types` | `serving/serving_ref.cpp` | `serving/embedding` | **landed** |
+| `broadcast` | `collectives/collectives_ref.cpp` | — | **landed** |
+| `reduce_sum` (collective) | `collectives/collectives_ref.cpp` | — | **landed** |
 
 ## Phase 8 — Linear Attention (9)
 

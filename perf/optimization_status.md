@@ -2332,3 +2332,49 @@ and FP16/BF16 store variants for public embedding storage if ROCm grows a
 shared storage dispatcher.
 
 Raw results: `perf/results/2026-07-26/quant-authoring-phase6-final3/bench.txt`.
+
+## 2026-07-26: Sampling And Embedding Stragglers Phase 7 - LANDED
+
+Status: landed.
+
+Current implementation: `kernels/sampling/phase7_stragglers/variants/rocm_cdna3`.
+Current public route: Phase 7 operation entries in `.quixicore/kernels.yaml`:
+`top_k_renorm`, `top_p_renorm`, `logits_softcap`,
+`embedding_lookup_types`, `broadcast`, and `reduce_sum`.
+
+References inspected: CPU `utils/utils_extended_ref.cpp`,
+`serving/basert_ref.cpp`, and `collectives/collectives_ref.cpp`; Metal
+`sampling/sampling/sampling_transforms.metal` and
+`serving/embedding/embedding.metal`; existing ROCm RCCL collectives docs for
+the distinction between single-device CPU tensor contracts and multi-GPU
+transport.
+
+Correctness: `make -C kernels/sampling/phase7_stragglers/variants/rocm_cdna3 test`
+and archived `bench` both report `ALL PASS`. The harness has 8 checks: stable
+top-k and top-p probability renormalization with lower-token tie breaks,
+final-logit softcap, FP32/FP16/BF16 token+type embedding lookup with invalid ids
+zeroed, root broadcast, and root reduce-sum. BF16 embedding expected values are
+rounded through BF16 storage before accumulation and output comparison.
+
+Baseline and experiments on MI300X gfx942, ROCm 7.2.4, HIP 7.2.53211,
+bare metal, command
+`HIP_VISIBLE_DEVICES=0 make -C kernels/sampling/phase7_stragglers/variants/rocm_cdna3 bench`.
+Benchmarks used printed warmups/iterations; fast kernels use repeated launches
+per timing sample and report per-launch medians.
+
+| route / shape | baseline | candidate/current | decision |
+| --- | ---: | ---: | --- |
+| `top_k_renorm`, vocab 262144, k 64 | scalar 4.7255 ms, 0.2 GB/s | rank kernel 0.4260 ms, 2.5 GB/s, 11.09x | keep rank route |
+| `top_p_renorm`, vocab 131072, p 0.91 | scalar 274.8679 ms | rank kernel 0.8937 ms, 0.6 GB/s, 307.58x | keep rank route |
+| `logits_softcap`, 33554432 fp32 logits | scalar 3675.1438 ms | elementwise 0.0467 ms, 2874.7 GB/s | keep elementwise route |
+| `embedding_lookup_types`, rows 32768, dim 1024, tokens 4096, fp32 | - | current 0.0505 ms, 2669.4 GB/s | landed measured route |
+| `broadcast`, 4 roots x 9437184 fp32 values | scalar 1056.3555 ms | parallel copy 0.0192 ms, 1968.5 GB/s, 55085.76x | keep parallel route |
+| `reduce_sum`, 4 inputs x 9437184 fp32 values | scalar 686.3865 ms | parallel sum 0.0090 ms, 4175.7 GB/s, 75926.73x | keep parallel route |
+
+Decision: KEEP the Phase 7 ports. Sampling preserves the CPU/Metal stable
+ordering contract while avoiding serial selection, softcap and the collective
+tensor contracts are direct memory-bandwidth kernels, and typed embedding now
+matches FP32/FP16/BF16 storage semantics. The collectives are deliberately not
+RCCL replacements; they land the CPU root tensor operations on one device.
+
+Raw results: `perf/results/2026-07-26/phase7-stragglers-final/bench.txt`.

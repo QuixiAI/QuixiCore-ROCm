@@ -47,7 +47,7 @@ families:
     paths:
       - kernels/moe
   sampling:
-    status: planned
+    status: partial
     paths:
       - kernels/sampling
   serving:
@@ -563,6 +563,78 @@ operations:
       - name: rocm_cdna3
         status: imported
         path: kernels/quantization/lm_head/variants/rocm_cdna3
+
+  top_k_renorm:
+    family: sampling
+    status: implemented
+    path: kernels/sampling/phase7_stragglers
+    notes: >-
+      Phase 7 probability-domain top-k renormalization with CPU stable ordering
+      by probability descending and lower token id on ties.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/sampling/phase7_stragglers/variants/rocm_cdna3
+
+  top_p_renorm:
+    family: sampling
+    status: implemented
+    path: kernels/sampling/phase7_stragglers
+    notes: >-
+      Phase 7 probability-domain nucleus renormalization with stable CPU
+      ordering and exact kept-mass normalization.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/sampling/phase7_stragglers/variants/rocm_cdna3
+
+  logits_softcap:
+    family: sampling
+    status: implemented
+    path: kernels/sampling/phase7_stragglers
+    notes: >-
+      Phase 7 final-logit softcap, out = cap * tanh(logit / cap), separate from
+      attention score capping.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/sampling/phase7_stragglers/variants/rocm_cdna3
+
+  embedding_lookup_types:
+    family: serving
+    status: implemented
+    path: kernels/sampling/phase7_stragglers
+    notes: >-
+      Phase 7 BERT-family token + type embedding lookup for FP32/FP16/BF16
+      storage. Invalid token or type ids contribute zero.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/sampling/phase7_stragglers/variants/rocm_cdna3
+
+  broadcast:
+    family: collectives
+    status: implemented
+    path: kernels/sampling/phase7_stragglers
+    notes: >-
+      Phase 7 CPU root-broadcast tensor contract on one device. Multi-GPU
+      broadcast transport remains part of the RCCL collectives path.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/sampling/phase7_stragglers/variants/rocm_cdna3
+
+  reduce_sum:
+    family: collectives
+    status: implemented
+    path: kernels/sampling/phase7_stragglers
+    notes: >-
+      Phase 7 CPU root reduce-sum tensor contract on one device. Multi-GPU
+      reduce/all-reduce transport remains part of the RCCL collectives path.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/sampling/phase7_stragglers/variants/rocm_cdna3
 
   turboquant:
     family: quantization
