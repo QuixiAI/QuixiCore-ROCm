@@ -25,6 +25,25 @@ static int g_fail = 0;
 template <typename T> T* dnew(const std::vector<T>& h){T*d;CK(hipMalloc(&d,h.size()*sizeof(T)));CK(hipMemcpy(d,h.data(),h.size()*sizeof(T),hipMemcpyHostToDevice));return d;}
 template <typename T> T* dzero(size_t n){T*d;CK(hipMalloc(&d,n*sizeof(T)));CK(hipMemset(d,0,n*sizeof(T)));return d;}
 template <typename T> std::vector<T> d2h(const T*d,size_t n){std::vector<T> h(n);CK(hipMemcpy(h.data(),d,n*sizeof(T),hipMemcpyDeviceToHost));return h;}
+// Tolerance contract. A flat bound hides regressions: these kernels span four
+// orders of magnitude of legitimate error, so each is bounded by what its
+// arithmetic can actually achieve, with ~25x headroom for toolchain drift.
+//
+//   TOL_EXACT_CODE  formats whose codes are exactly fp16-representable (e4m3,
+//                   e2m1), so the fp16 MFMA operands are lossless and only fp32
+//                   accumulation contributes.
+//   TOL_FP16_MFMA   formats that dequantize to arbitrary values, which the fp16
+//                   MFMA fragment then rounds -- this floor is the kernel's
+//                   design, not a defect.
+//   TOL_FP32_DOT    non-MFMA dot-product kernels: fp32 throughout.
+//
+// References MUST consume the same fp16 activations the kernels do (see Aq).
+// Comparing against the pre-rounding float array measures input rounding rather
+// than the kernel and inflates every residual by ~1000x.
+static constexpr double TOL_EXACT_CODE = 5e-6;
+static constexpr double TOL_FP16_MFMA  = 1e-3;
+static constexpr double TOL_FP32_DOT   = 1e-4;
+
 static void report(const char* nm, double err, double tol){bool ok=err<=tol;printf("%-34s %s (rel %.3e, tol %.1e)\n",nm,ok?"PASS":"FAIL",err,tol);if(!ok)++g_fail;}
 
 // CPU replica of nvfp4_sf_offset (intra-expert; row < 128 -> m_tile stays 0).
@@ -46,6 +65,9 @@ int main() {
         auto A = randv((size_t)total_rows * K, -1, 1);
         std::vector<__half> Ah((size_t)total_rows * K);
         for (size_t i = 0; i < Ah.size(); ++i) Ah[i] = __float2half(A[i]);
+        // What the kernel actually sees: fp16-rounded, widened back to float.
+        std::vector<float> Aq(Ah.size());
+        for (size_t i = 0; i < Ah.size(); ++i) Aq[i] = __half2float(Ah[i]);
         // per-expert fp8 weights (E,N,K) + rowwise scale (E,N)
         std::vector<uint8_t> B((size_t)E * N * K);
         std::vector<float> Bsc((size_t)E * N);
@@ -69,14 +91,14 @@ int main() {
                 if (e < 0) continue;                       // padding rows: not checked (never read)
                 double acc = 0;
                 for (int k = 0; k < K; ++k)
-                    acc += (double)A[(size_t)r * K + k]
+                    acc += (double)Aq[(size_t)r * K + k]
                          * (double)e4m3_decode_host(B[((size_t)e * N + n) * K + k]);
                 acc *= Bsc[(size_t)e * N + n];
                 gsum += std::abs((double)Y[(size_t)r * N + n] - acc);
                 rsum += std::abs(acc);
             }
         }
-        report("moe_gemm_fp8 (fp64)", gsum / std::max(rsum, 1e-30), 5e-3);
+        report("moe_gemm_fp8 (fp64)", gsum / std::max(rsum, 1e-30), TOL_EXACT_CODE);
     }
 
     // ---- nvfp4 dual-fp4 MoE GEMM ----
@@ -138,7 +160,7 @@ int main() {
                 rsum += std::abs(acc);
             }
         }
-        report("moe_gemm_nvfp4 (fp64)", gsum / std::max(rsum, 1e-30), 5e-3);
+        report("moe_gemm_nvfp4 (fp64)", gsum / std::max(rsum, 1e-30), TOL_EXACT_CODE);
     }
 
     // ---- WNA16 int4 / int8 MoE GEMM ----
@@ -150,6 +172,9 @@ int main() {
         auto A = randv((size_t)total_rows * K, -1, 1);
         std::vector<__half> Ah((size_t)total_rows * K);
         for (size_t i = 0; i < Ah.size(); ++i) Ah[i] = __float2half(A[i]);
+        // What the kernel actually sees: fp16-rounded, widened back to float.
+        std::vector<float> Aq(Ah.size());
+        for (size_t i = 0; i < Ah.size(); ++i) Aq[i] = __half2float(Ah[i]);
         const int QMAX = (1 << BIT) - 1;
         auto order = [&](int inner) {
             if (BIT == 4) { int o[8] = {0,2,4,6,1,3,5,7}; return o[inner & 7]; }
@@ -204,7 +229,7 @@ int main() {
                     const int g = k / GS;
                     const double s = __half2float(sc[((size_t)e * N + n) * groups + g]);
                     const double z = zpv[((size_t)e * N + n) * groups + g];
-                    acc += (double)A[(size_t)r * K + k]
+                    acc += (double)Aq[(size_t)r * K + k]
                          * ((q[((size_t)e * N + n) * K + k] - z) * s);
                 }
                 gsum += std::abs((double)Y[(size_t)r * N + n] - acc);
@@ -212,7 +237,7 @@ int main() {
             }
         }
         char nm[40]; snprintf(nm, sizeof nm, "moe_gemm_wna16 int%d (fp64)", BIT);
-        report(nm, gsum / std::max(rsum, 1e-30), 5e-3);
+        report(nm, gsum / std::max(rsum, 1e-30), TOL_FP16_MFMA);
     }
 
     // ---- fused SiLU-and-mul fp8 quant (static + per-block) ----
@@ -355,6 +380,9 @@ int main() {
         auto A = randv((size_t)total_rows * K, -1, 1);
         std::vector<__half> Ah((size_t)total_rows * K);
         for (size_t i = 0; i < Ah.size(); ++i) Ah[i] = __float2half(A[i]);
+        // What the kernel actually sees: fp16-rounded, widened back to float.
+        std::vector<float> Aq(Ah.size());
+        for (size_t i = 0; i < Ah.size(); ++i) Aq[i] = __half2float(Ah[i]);
 
         // Random but well-formed q2_K blocks: arbitrary scales/qs bytes, sane d/dmin.
         std::vector<uint8_t> B((size_t)E * N * bpr * BB);
@@ -395,12 +423,12 @@ int main() {
                 const uint8_t* row = B.data() + ((size_t)e * N + n) * bpr * BB;
                 double acc = 0;
                 for (int k = 0; k < K; ++k)
-                    acc += (double)A[(size_t)r * K + k] * q2k_host(row + (k / 256) * BB, k % 256);
+                    acc += (double)Aq[(size_t)r * K + k] * q2k_host(row + (k / 256) * BB, k % 256);
                 gsum += std::abs((double)Y[(size_t)r * N + n] - acc);
                 rsum += std::abs(acc);
             }
         }
-        report("moe_gemm_gguf q2_K (fp64)", gsum / std::max(rsum, 1e-30), 5e-3);
+        report("moe_gemm_gguf q2_K (fp64)", gsum / std::max(rsum, 1e-30), TOL_FP16_MFMA);
     }
 
     // ---- Phase 4: row-indexed quantized expert GEMM + fused SwiGLU (q2_K) ----
@@ -412,6 +440,9 @@ int main() {
         auto A = randv((size_t)R * KK, -1, 1);
         std::vector<__half> Ah(A.size());
         for (size_t i = 0; i < Ah.size(); ++i) Ah[i] = __float2half(A[i]);
+        // What the kernel actually sees: fp16-rounded, widened back to float.
+        std::vector<float> Aq(Ah.size());
+        for (size_t i = 0; i < Ah.size(); ++i) Aq[i] = __half2float(Ah[i]);
 
         // qgemm weights [E,N,K] packed; qswiglu weights [E,2*inter,K] packed
         const int INTER = 32, OUTS = 2 * INTER;
@@ -442,7 +473,7 @@ int main() {
             const uint8_t* w = W.data() + ((size_t)e * outs + row) * bpr * BB;
             double acc = 0;
             for (int k = 0; k < KK; ++k)
-                acc += (double)__half2float(Ah[(size_t)r * KK + k]) * q2k(w + (k / 256) * BB, k % 256);
+                acc += (double)Aq[(size_t)r * KK + k] * q2k(w + (k / 256) * BB, k % 256);
             return acc;
         };
 
@@ -477,8 +508,8 @@ int main() {
                 es = std::max(es, std::abs((double)Ys[(size_t)r * INTER + n] - ref) / std::max(1.0, std::abs(ref)));
             }
         }
-        report("moe_grouped_qgemm q2_K (fp64)", eg, 5e-3);
-        report("moe_grouped_qswiglu q2_K (fp64)", es, 5e-3);
+        report("moe_grouped_qgemm q2_K (fp64)", eg, TOL_FP32_DOT);
+        report("moe_grouped_qswiglu q2_K (fp64)", es, TOL_FP32_DOT);
     }
 
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL PASS", g_fail);
