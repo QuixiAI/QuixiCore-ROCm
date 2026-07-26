@@ -46,7 +46,7 @@ the kernel; a missing entry does not.
 | 3 | Dense matmul epilogues | 10 | 0 | 0 | **10** |
 | 4 | MoE completeness | 7 | 0 | 0 | **7** |
 | 5 | BaseQ canonical family | 9 | 0 | 0 | **9** |
-| 6 | Quant authoring & quantized embedding | 14 | 14 | 0 | 0 |
+| 6 | Quant authoring & quantized embedding | 14 | 0 | 0 | **14** |
 | 7 | Sampling & embedding stragglers | 6 | 6 | 0 | 0 |
 | 8 | Linear attention | 9 | 9 | 0 | 0 |
 | 9 | State-space & hyper-connections | 6 | 6 | 0 | 0 |
@@ -54,7 +54,7 @@ the kernel; a missing entry does not.
 | 11 | Elementwise & tensor-op surface | 42 | 42 | 0 | 0 |
 | 12 | Convolution & audio | 16 | 16 | 0 | 0 |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **133** | **0** | **45** |
+| | **Total** | **178** | **119** | **0** | **59** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -247,25 +247,34 @@ projection-plus-argmax route.
 
 ## Phase 6 — Quant Authoring, Fake-Quant, Quantized Embedding (14)
 
-Extends `kernels/quantization/qgemv/variants/rocm_cdna3/quant_rt.cu` and the
-landed 29-format dequant table. Also updates `.quixicore/quant-formats.yaml`.
+Landed in `kernels/quantization/quant_authoring/variants/rocm_cdna3`. It reuses
+the landed 29-format dequant table where packed GGUF rows are consumed, and it
+updates `.quixicore/quant-formats.yaml`.
+
+2026-07-26 update: the Phase 6 harness reports `ALL PASS` for 25 checks covering
+INT8 and FP8 fake quantization, byte-exact TQ2_0 and ternary pack/unpack,
+ternary statistics and flip counts, NaN-preserving calibration absmax, BitNet
+`qgemm_backward_input`, packed-table gather/embedding over `q4_0`/`q8_0`/`q6_K`,
+and MXFP4 GEMV. The focused benchmark keeps wave64/block-parallel routes for
+the reduction and packing kernels, with raw output archived under
+`perf/results/2026-07-26/quant-authoring-phase6-final3/`.
 
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `fake_quant_int8` | `quantization/quantization_ref.cpp` | `quantization/fake_quant` | planned |
-| `fake_quant_float8` | `quantization/quantization_ref.cpp` | `quantization/fake_quant_fp8` | planned |
-| `tq2_0_pack` | `quantization/quantization_ref.cpp` | `quantization/quantize_tq2_0` | planned |
-| `tq2_0_unpack` | `quantization/quantization_ref.cpp` | `quantization/quantize_tq2_0` | planned |
-| `ternary_pack` | `quantization/quantization_ref.cpp` | `quantization/weight_quant_ternary` | planned |
-| `ternary_unpack` | `quantization/quantization_ref.cpp` | `quantization/weight_quant_ternary` | planned |
-| `ternary_stats` | `quantization/quantization_ref.cpp` | `quantization/ternary_stats` | planned |
-| `ternary_code_flip_count` | `quantization/quantization_ref.cpp` | `quantization/ternary_stats` | planned |
-| `calibration_absmax` | `quantization/activation_quant_ref.cpp` | — | planned |
-| `qgemm_backward_input` | `quantization/qgemm_extended_ref.cpp` | `quantization/qgemm_bwd` | planned |
-| `dequant_gather` | `quantization/base_q_ref.cpp` | `quantization/dequant_gather` | planned |
-| `quantized_embedding` | `quantization/qgemm_extended_ref.cpp` | `quantization/dequant_gather` | planned |
-| `quantized_embedding_bag` | `quantization/qgemm_extended_ref.cpp` | `quantization/dequant_gather` | planned |
-| `mxfp4_gemv` | `quantization/microscale_ref.cpp` | — | planned |
+| `fake_quant_int8` | `quantization/quantization_ref.cpp` | `quantization/fake_quant` | **landed** |
+| `fake_quant_float8` | `quantization/quantization_ref.cpp` | `quantization/fake_quant_fp8` | **landed** |
+| `tq2_0_pack` | `quantization/quantization_ref.cpp` | `quantization/quantize_tq2_0` | **landed** |
+| `tq2_0_unpack` | `quantization/quantization_ref.cpp` | `quantization/quantize_tq2_0` | **landed** |
+| `ternary_pack` | `quantization/quantization_ref.cpp` | `quantization/weight_quant_ternary` | **landed** |
+| `ternary_unpack` | `quantization/quantization_ref.cpp` | `quantization/weight_quant_ternary` | **landed** |
+| `ternary_stats` | `quantization/quantization_ref.cpp` | `quantization/ternary_stats` | **landed** |
+| `ternary_code_flip_count` | `quantization/quantization_ref.cpp` | `quantization/ternary_stats` | **landed** |
+| `calibration_absmax` | `quantization/activation_quant_ref.cpp` | — | **landed** |
+| `qgemm_backward_input` | `quantization/qgemm_extended_ref.cpp` | `quantization/qgemm_bwd` | **landed** |
+| `dequant_gather` | `quantization/base_q_ref.cpp` | `quantization/dequant_gather` | **landed** |
+| `quantized_embedding` | `quantization/qgemm_extended_ref.cpp` | `quantization/dequant_gather` | **landed** |
+| `quantized_embedding_bag` | `quantization/qgemm_extended_ref.cpp` | `quantization/dequant_gather` | **landed** |
+| `mxfp4_gemv` | `quantization/microscale_ref.cpp` | — | **landed** |
 
 ## Phase 7 — Sampling And Embedding Stragglers (6)
 

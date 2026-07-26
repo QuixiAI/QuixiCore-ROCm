@@ -2,24 +2,24 @@ schema_version: 0.1
 backend: rocm
 formats:
   gguf:
-    status: planned
-    notes: Not yet claimed in the ROCm backend manifest.
+    status: partial
+    notes: q4_0, q8_0, and q6_K are exercised by Phase 6 packed-table gather and embedding; the qgemv format table covers the broader GGUF decode set.
   mx:
     status: partial
-    notes: MXFP8-related GEMM work exists under the current GEMM tree.
+    notes: MXFP8-related GEMM work exists under the current GEMM tree; Phase 6 adds MXFP4 GEMV coverage with E8M0 block scales.
   fp8:
     status: partial
-    notes: FP8 GEMM coverage exists; broader fp8 serving and quantization coverage is planned.
+    notes: FP8 GEMM coverage exists; Phase 6 adds E4M3FN/E5M2 fake-quant coverage.
   fp4:
-    status: planned
-    notes: Not yet claimed in the ROCm backend manifest.
+    status: partial
+    notes: Phase 6 adds TQ2_0 authoring and MXFP4 GEMV coverage; broader FP4 serving/projection coverage remains operation-specific.
   bitnet:
-    status: planned
-    notes: Not yet claimed in the ROCm backend manifest.
+    status: partial
+    notes: Phase 6 adds ternary pack/unpack/statistics and BitNet qgemm backward-input coverage.
 status_values:
   - implemented
   - partial
   - experimental
   - planned
   - unsupported
-notes: Format details should be expanded into operation-level coverage as quant kernels land.
+notes: Format details are expanded into operation-level coverage as quant kernels land.

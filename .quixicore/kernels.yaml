@@ -193,6 +193,166 @@ operations:
         status: implemented
         path: kernels/quantization/qgemm_int/variants/rocm_cdna3
 
+  fake_quant_int8:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: >-
+      Phase 6 per-row dynamic INT8 fake quantization: symmetric scale
+      amax/127, round-to-nearest-even codes, and FP32 dequantized output.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  fake_quant_float8:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: >-
+      Phase 6 FP8 fake quantization for E4M3FN and E5M2 with CPU-compatible
+      RNE encoding and saturating finite overflow.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  tq2_0_pack:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: >-
+      Phase 6 llama.cpp TQ2_0 authoring: one 66-byte block per 256 values,
+      low two-bit codes and fp16 scale in the final two bytes.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  tq2_0_unpack:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: Phase 6 TQ2_0 unpack with byte-exact CPU layout coverage.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  ternary_pack:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: >-
+      Phase 6 BitNet ternary authoring over 10-byte blocks
+      `{fp16 scale, eight 2-bit-code bytes}` with group mean-abs scaling.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  ternary_unpack:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: Phase 6 BitNet ternary unpack for the CPU/Metal 10-byte block layout.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  ternary_stats:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: Phase 6 per-row ternary code histogram over packed BitNet blocks.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  ternary_code_flip_count:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: Phase 6 per-row count of changed ternary 2-bit codes between packed buffers.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  calibration_absmax:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: >-
+      Phase 6 per-channel calibration amax over [tokens, channels], preserving
+      optional running values, infinities, and NaN propagation.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  qgemm_backward_input:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: >-
+      Phase 6 BitNet backward-input GEMM: grad_x = grad_y @ dequant(W), reading
+      ternary 10-byte blocks directly with a CDNA3 wave64 split-dot route.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  dequant_gather:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: >-
+      Phase 6 packed-table gather over q4_0, q8_0, and q6_K rows, zero-filling
+      invalid ids to match the Metal kernel contract.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  quantized_embedding:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: >-
+      Phase 6 packed embedding lookup with optional FP32 add term and
+      Metal-compatible invalid-id zero fill.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  quantized_embedding_bag:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: >-
+      Phase 6 CSR-style packed embedding bag with optional sample weights and
+      mean mode over valid ids.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
+  mxfp4_gemv:
+    family: quantization
+    status: implemented
+    path: kernels/quantization/quant_authoring
+    notes: >-
+      Phase 6 MXFP4 GEMV with adjacent E2M1 nibbles and one E8M0 scale code per
+      32 weights.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/quantization/quant_authoring/variants/rocm_cdna3
+
   base_q_dequant:
     family: quantization
     status: implemented

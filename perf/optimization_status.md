@@ -2271,3 +2271,64 @@ half the elements differing at every head size — the signature a sign error
 should produce.
 
 Baseline: none; functional port, no speedup claimed.
+
+## 2026-07-26: Quant Authoring And Embedding Phase 6 — LANDED
+
+Status: landed.
+
+Current implementation: `kernels/quantization/quant_authoring/variants/rocm_cdna3`.
+Current public route: Phase 6 operation entries in `.quixicore/kernels.yaml`:
+`fake_quant_int8`, `fake_quant_float8`, `tq2_0_pack`, `tq2_0_unpack`,
+`ternary_pack`, `ternary_unpack`, `ternary_stats`,
+`ternary_code_flip_count`, `calibration_absmax`, `qgemm_backward_input`,
+`dequant_gather`, `quantized_embedding`, `quantized_embedding_bag`, and
+`mxfp4_gemv`.
+
+References inspected: CPU `quantization/quantization_ref.cpp`,
+`serving/basert_ref.cpp`, `quantization/qgemm_extended_ref.cpp`,
+`serving/serving_quant_ref.cpp`, `quantization/microscale_ref.cpp`; Metal
+`quantization/dequant_gather/dequant_gather.metal` and
+`quantization/qgemm_bwd/qgemm_bwd.metal`; existing ROCm
+`quantization/qgemv/variants/rocm_cdna3/quant_formats*.cuh`.
+
+Correctness: `make -C kernels/quantization/quant_authoring/variants/rocm_cdna3 test`
+and archived `bench` both report `ALL PASS`. The harness has 25 checks: INT8
+fake-quant output/codes/scales; FP8 E4M3FN and E5M2 output/codes/scale;
+byte-exact TQ2_0 pack plus unpack; byte-exact ternary pack plus unpack,
+histogram, and flip count; NaN-preserving calibration absmax; q4_0/q8_0/q6_K
+packed gather; q8_0 embedding with add; q6_K weighted mean embedding bag;
+BitNet qgemm backward-input; and MXFP4 GEMV. Tolerances are exact for codes and
+packing, fp32/fp8 for numeric outputs, with NaNs checked explicitly for
+calibration.
+
+Baseline and experiments on MI300X gfx942, ROCm 7.2.4, HIP 7.2.53211,
+bare metal, command
+`HIP_VISIBLE_DEVICES=0 make -C kernels/quantization/quant_authoring/variants/rocm_cdna3 bench`.
+Benchmarks used printed warmups/iterations; fast kernels use repeated launches
+per timing sample and report per-launch medians.
+
+| route / shape | baseline | candidate/current | decision |
+| --- | ---: | ---: | --- |
+| `fake_quant_int8`, fp32 8192x1024 | scalar 0.6887 ms, 109.7 GB/s | wave64 0.0252 ms, 3001.1 GB/s, 27.36x | keep wave64 |
+| `fake_quant_float8`, E4M3FN count 1,048,576 | scalar 550.1906 ms | wave64 10.8514 ms, 50.70x | keep wave64; encoder remains ALU-heavy |
+| `tq2_0_pack`, rows 32768, K=512 | scalar 0.6982 ms, 198.4 GB/s | block-parallel 0.0786 ms, 1763.4 GB/s, 8.89x | keep block-parallel |
+| `tq2_0_unpack`, rows 32768, K=512 | — | current 0.0404 ms, 3429.0 GB/s | landed measured route |
+| `ternary_pack`, rows 65536, K=512, group=128 | scalar 1.7686 ms, 157.7 GB/s | block-parallel 0.3124 ms, 892.8 GB/s, 5.66x | keep block-parallel |
+| `ternary_unpack`, rows 65536, K=512 | — | current 0.0828 ms, 3369.3 GB/s | landed measured route |
+| `ternary_stats`, rows 65536, K=512 | — | current 0.0561 ms, 186.9 GB/s | landed measured route |
+| `ternary_code_flip_count`, rows 65536, K=512 | — | current 0.0484 ms, 433.1 GB/s | landed measured route |
+| `calibration_absmax`, fp32 4096x4096 | scalar 1.0833 ms, 62.0 GB/s | block-parallel 0.1876 ms, 358.0 GB/s, 5.78x | keep block-parallel |
+| `dequant_gather`, q8_0 rows 65536, dim 256, tokens 65536 | — | current 0.0426 ms, 3565.3 GB/s | landed measured route |
+| `quantized_embedding`, q8_0 add, same shape | — | current 0.0507 ms, 2998.8 GB/s | landed measured route |
+| `quantized_embedding_bag`, q6_K rows 32768, dim 256, ids 65536, bags 8192 | — | current 0.0235 ms, 942.9 GB/s | landed measured route |
+| `qgemm_backward_input`, BitNet M=64,N=1024,K=512 | scalar 0.1453 ms, 0.5 TFLOP/s | wave64 0.1340 ms, 0.5 TFLOP/s, 1.08x | keep wave64; simple split-dot win |
+| `mxfp4_gemv`, N=65536,K=1024 | scalar 0.1354 ms, 1.0 TFLOP/s | wave64 0.0689 ms, 1.9 TFLOP/s, 1.97x | keep wave64 |
+
+Decision: KEEP the Phase 6 ports. The canonical byte layouts are exact for the
+authoring formats, packed-table consumers reuse the existing ROCm GGUF
+dequantizers, and every measured A/B candidate is a win. Follow-up levers are a
+multi-wave/block FP8 fake-quant reduction to replace the one-wave count path
+and FP16/BF16 store variants for public embedding storage if ROCm grows a
+shared storage dispatcher.
+
+Raw results: `perf/results/2026-07-26/quant-authoring-phase6-final3/bench.txt`.
