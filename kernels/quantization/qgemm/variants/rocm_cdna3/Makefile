@@ -9,7 +9,7 @@ all: qgemm.out qflux.out qgemm_variants.out
 qflux.out: qflux.cu tm_qmm_mfma.cuh quant_formats.cuh quant_formats_tables.cuh quant_tables.cuh
 	$(HIPCC) $(HIPFLAGS) $< -o $@
 
-qgemm.out: qgemm.cu tm_qmm_mfma.cuh quant_formats.cuh quant_formats_tables.cuh quant_tables.cuh
+qgemm.out: qgemm.cu qgemm_kernels.cuh tm_qmm_mfma.cuh quant_formats.cuh quant_formats_tables.cuh quant_tables.cuh
 	$(HIPCC) $(HIPFLAGS) $< -o $@
 qgemm_variants.out: qgemm_variants.cu qgemm_variants_kernels.cuh tm_qmm_mfma.cuh quant_formats.cuh quant_formats_tables.cuh quant_tables.cuh
 	$(HIPCC) $(HIPFLAGS) $< -o $@
@@ -27,4 +27,8 @@ bench: qgemm_bench.out
 	HIP_VISIBLE_DEVICES=0 ./qgemm_bench.out 64 4096 4096
 	HIP_VISIBLE_DEVICES=0 ./qgemm_bench.out 256 4096 4096
 	HIP_VISIBLE_DEVICES=0 ./qgemm_bench.out 2048 4096 4096
-.PHONY: bench
+qgemm_q2k_bench.out: qgemm_q2k_bench.cu qgemm_kernels.cuh tm_qmm_mfma.cuh quant_formats.cuh quant_formats_tables.cuh quant_tables.cuh
+	$(HIPCC) $(HIPFLAGS) $< -o $@
+q2kbench: qgemm_q2k_bench.out
+	HIP_VISIBLE_DEVICES=0 ./qgemm_q2k_bench.out
+.PHONY: bench q2kbench

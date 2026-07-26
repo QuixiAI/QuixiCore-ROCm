@@ -17,7 +17,7 @@
 // Build:
 //   /usr/local/cuda/bin/nvcc qgemm.cu -std=c++20 -O2 -DKITTENS_SM86 \
 //     -gencode arch=compute_86,code=sm_86 -o qgemm.out
-#include "tm_qmm_mfma.cuh"
+#include "qgemm_kernels.cuh"
 #include <hip/hip_fp16.h>
 #include <cstdio>
 #include <cstdlib>
@@ -27,186 +27,6 @@
 
 using namespace tmq;
 
-// ---- qgemm: one 64-wide wavefront per 16x16 output tile (CDNA3 MFMA) ----
-// Y(M,N) = X(M,K) @ W(N,K)^T. A=X, B=W^T; one v_mfma_f32_16x16x16_f16 per K=16.
-// Lane l owns output column n0+l%16, rows m0 + 4*(l/16) + {0..3}.
-template<typename FMT>
-__global__ void qgemm(float* Y, const __half* X, const uint8_t* Wq, int M, int N, int K) {
-    const int n0 = blockIdx.x * 16;
-    const int m0 = blockIdx.y * 16;
-    const int bpr = K / FMT::block_k;
-
-    float4_t acc = {0, 0, 0, 0};
-    for (int k0 = 0; k0 < K; k0 += 16) {
-        half4_t a = load_xfrag(X, K, m0, k0);
-        half4_t b = load_wfrag<FMT>(Wq, bpr, n0, k0);
-        acc = mma_16x16x16(a, b, acc);
-    }
-    const int l = threadIdx.x & 63;
-    const int n = n0 + (l & 15);
-    const int mrow = m0 + (l >> 4) * 4;
-    #pragma unroll
-    for (int v = 0; v < 4; v++)
-        if (mrow + v < M) Y[size_t(mrow + v) * N + n] = acc[v];
-}
-
-// wide N-tile variant (perf pass for M>=~256): NT 16-wide N-tiles per wavefront;
-// the X fragment is loaded once per k-step and reused across NT W-fragments, so
-// X traffic drops NT-fold and the MFMA:load ratio rises NT-fold. Bitwise-identical
-// to qgemm (same fragment math). Occupancy-limited at tiny M (see qgemm_pick_nt).
-template<typename FMT, int NT>
-__global__ void qgemm_wide(float* Y, const __half* X, const uint8_t* Wq, int M, int N, int K) {
-    const int n0 = blockIdx.x * (16 * NT);
-    const int m0 = blockIdx.y * 16;
-    const int bpr = K / FMT::block_k;
-    float4_t acc[NT];
-    #pragma unroll
-    for (int nt = 0; nt < NT; nt++) acc[nt] = float4_t{0, 0, 0, 0};
-    for (int k0 = 0; k0 < K; k0 += 16) {
-        half4_t a = load_xfrag(X, K, m0, k0);
-        #pragma unroll
-        for (int nt = 0; nt < NT; nt++) {
-            half4_t b = load_wfrag<FMT>(Wq, bpr, n0 + nt * 16, k0);
-            acc[nt] = mma_16x16x16(a, b, acc[nt]);
-        }
-    }
-    const int l = threadIdx.x & 63, ln = l & 15, mrow = m0 + (l >> 4) * 4;
-    #pragma unroll
-    for (int nt = 0; nt < NT; nt++) { const int n = n0 + nt * 16 + ln;
-        #pragma unroll
-        for (int v = 0; v < 4; v++) if (mrow + v < M) Y[size_t(mrow + v) * N + n] = acc[nt][v];
-    }
-}
-
-template<typename FMT, int MT, int NT>
-__device__ __forceinline__ void stage_qgemm_cta_tile(
-        __half* sX, __half* sW, const __half* X, const uint8_t* Wq,
-        int M, int K, int bpr, int m0, int n0, int k0) {
-    const int tid = threadIdx.x;
-    for (int idx = tid; idx < MT * 16 * 16; idx += blockDim.x) {
-        const int mt = idx / (16 * 16), r = idx - mt * 16 * 16;
-        const int m = r / 16, k = r & 15, gm = m0 + mt * 16 + m;
-        sX[idx] = (gm < M) ? X[size_t(gm) * K + k0 + k] : __float2half(0.0f);
-    }
-    for (int idx = tid; idx < NT * 16 * 16; idx += blockDim.x) {
-        const int nt = idx / (16 * 16), r = idx - nt * 16 * 16;
-        const int n = r / 16, k = k0 + (r & 15);
-        const int kb = k / FMT::block_k, cin = k % FMT::block_k;
-        const uint8_t* base = Wq + (size_t(n0 + nt * 16 + n) * bpr + kb) * FMT::block_bytes;
-        sW[idx] = __float2half(FMT::dequant(base, cin));
-    }
-}
-
-__device__ __forceinline__ half4_t load_xfrag_cta_smem(const __half* sX, int mt) {
-    const int l = threadIdx.x & 63;
-    const int m = l & 15;
-    const int k = (l >> 4) * 4;
-    return *reinterpret_cast<const half4_t*>(sX + mt * 16 * 16 + m * 16 + k);
-}
-
-__device__ __forceinline__ half4_t load_wfrag_cta_smem(const __half* sW, int nt) {
-    const int l = threadIdx.x & 63;
-    const int n = l & 15;
-    const int k = (l >> 4) * 4;
-    return *reinterpret_cast<const half4_t*>(sW + nt * 16 * 16 + n * 16 + k);
-}
-
-// Multi-wave CTA candidate: MT wavefronts own MT 16-row output tiles and share
-// the same NT 16-column W tile through LDS. Useful only at prefill-scale M,
-// where the larger CTA grid still fills the device and W/dequant reuse amortizes
-// the LDS/barrier cost.
-template<typename FMT, int MT, int NT>
-__global__ void qgemm_cta_lds(float* Y, const __half* X, const uint8_t* Wq, int M, int N, int K) {
-    const int n0 = blockIdx.x * (16 * NT);
-    const int m0 = blockIdx.y * (16 * MT);
-    const int wave = threadIdx.x >> 6;
-    const int bpr = K / FMT::block_k;
-    __shared__ __half sX[2][MT * 16 * 16];
-    __shared__ __half sW[2][NT * 16 * 16];
-    float4_t acc[NT];
-    #pragma unroll
-    for (int nt = 0; nt < NT; nt++) acc[nt] = float4_t{0, 0, 0, 0};
-
-    stage_qgemm_cta_tile<FMT, MT, NT>(sX[0], sW[0], X, Wq, M, K, bpr, m0, n0, 0);
-    __syncthreads();
-    for (int k0 = 0; k0 < K; k0 += 16) {
-        const int buf = (k0 / 16) & 1, nxt = buf ^ 1;
-        half4_t a = load_xfrag_cta_smem(sX[buf], wave);
-        half4_t b[NT];
-        #pragma unroll
-        for (int nt = 0; nt < NT; nt++) b[nt] = load_wfrag_cta_smem(sW[buf], nt);
-        if (k0 + 16 < K) {
-            stage_qgemm_cta_tile<FMT, MT, NT>(sX[nxt], sW[nxt], X, Wq, M, K, bpr, m0, n0, k0 + 16);
-        }
-        #pragma unroll
-        for (int nt = 0; nt < NT; nt++) acc[nt] = mma_16x16x16(a, b[nt], acc[nt]);
-        __syncthreads();
-    }
-    const int l = threadIdx.x & 63, ln = l & 15;
-    const int mrow = m0 + wave * 16 + (l >> 4) * 4;
-    #pragma unroll
-    for (int nt = 0; nt < NT; nt++) {
-        const int n = n0 + nt * 16 + ln;
-        #pragma unroll
-        for (int v = 0; v < 4; v++) if (mrow + v < M) Y[size_t(mrow + v) * N + n] = acc[nt][v];
-    }
-}
-
-// Pick NT (N-tiles/wavefront) so the grid still fills the device (~2 waves over
-// 304 CUs); wider tiles amortize the X load but shrink the grid, so cap by
-// occupancy and require 16*NT | N. NT=1 => identical to qgemm (decode fallback).
-static inline int qgemm_pick_nt(int M, int N) {
-    const long tilesM = (M + 15) / 16;
-    for (int nt : {4, 2}) if (N % (16 * nt) == 0 && (long)(N / (16 * nt)) * tilesM >= 608) return nt;
-    return 1;
-}
-
-// full-dequant kernel (route for 256-superblock formats)
-template<typename FMT>
-__global__ void dequant_to_fp16(half* out, const uint8_t* Wq, int N, int K) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= N * K) return;
-    int row = idx / K, col = idx % K;
-    const uint8_t* base = Wq + (size_t(row) * (K / FMT::block_k) + col / FMT::block_k) * FMT::block_bytes;
-    out[idx] = __float2half(FMT::dequant(base, col % FMT::block_k));
-}
-
-// ---- ksplit variant (perf pass): at decode shapes the warp-per-tile grid is
-// only (N/16)*(M/16) warps — half the SMs idle at M=64,N=512. Slice K across
-// blockIdx.z and atomicAdd fp32 partials into a zeroed Y. Same fragment math.
-// (Also consolidated in tm_kernels.cuh as tmq::qgemm_ksplit.) ----
-template<typename FMT>
-__global__ void qgemm_ksplit(float* Y, const __half* X, const uint8_t* Wq,
-                             int M, int N, int K, int k_chunk) {
-    const int n0 = blockIdx.x * 16;
-    const int m0 = blockIdx.y * 16;
-    const int k_beg = blockIdx.z * k_chunk;
-    const int k_end = min(K, k_beg + k_chunk);
-    const int bpr = K / FMT::block_k;
-
-    float4_t acc = {0, 0, 0, 0};
-    for (int k0 = k_beg; k0 < k_end; k0 += 16) {
-        half4_t a = load_xfrag(X, K, m0, k0);
-        half4_t b = load_wfrag<FMT>(Wq, bpr, n0, k0);
-        acc = mma_16x16x16(a, b, acc);
-    }
-    const int l = threadIdx.x & 63;
-    const int n = n0 + (l & 15);
-    const int mrow = m0 + (l >> 4) * 4;
-    #pragma unroll
-    for (int v = 0; v < 4; v++)
-        if (mrow + v < M) atomicAdd(&Y[size_t(mrow + v) * N + n], acc[v]);
-}
-
-static inline int qgemm_pick_kchunk(int M, int N, int K, int block_k) {
-    const long tiles = long((N + 15) / 16) * ((M + 15) / 16);
-    const int target = 1664;                      // ~82 SMs x 20 warps
-    int splits = int((target + tiles - 1) / tiles);
-    const int align = (block_k > 16) ? block_k : 16;
-    int chunk = ((K / (splits > 0 ? splits : 1)) + align - 1) / align * align;
-    if (chunk < align) chunk = align;
-    return chunk;
-}
 
 // ---- harness ----
 static std::vector<uint8_t> read_file(const std::string& p) {
@@ -268,6 +88,50 @@ int run(const std::string& dir, int N, int K, int M) {
            rel < 0.02 ? "PASS" : "FAIL");
     int rc = rel < 0.02 ? 0 : 1;
 
+    // ---- in-GEMM route for the 256-superblock k-quants: decode straight into
+    // the MFMA B fragment via dequant4<FMT> (one sub-scale unpack per fragment).
+    // The dequant route above materializes all of W as fp16, which costs N*K*2
+    // bytes of extra footprint — 2 TB for a 262 GB Q2_K checkpoint — so serving
+    // needs this path even where the dequant route is faster on a 512x4096 tile.
+    if constexpr (SUPERBLOCK) {
+        auto launch_ig = [&] { qgemm<FMT><<<grid, 64>>>(dY, dX, dWq, M, N, K); };
+        launch_ig();
+        hipDeviceSynchronize();
+        if (hipGetLastError() != hipSuccess) { printf("IN-GEMM KERNEL ERROR\n"); return 1; }
+        hipEventRecord(t0);
+        for (int i = 0; i < iters; i++) launch_ig();
+        hipEventRecord(t1); hipEventSynchronize(t1);
+        float ms_ig; hipEventElapsedTime(&ms_ig, t0, t1); ms_ig /= iters;
+
+        std::vector<float> got_ig(size_t(M) * N);
+        hipMemcpy(got_ig.data(), dY, sizeof(float) * got_ig.size(), hipMemcpyDeviceToHost);
+        double gsum_ig = 0, gmax_ig = 0, exact = 0;
+        for (size_t i = 0; i < got_ig.size(); i++) {
+            double d = std::abs(double(got_ig[i]) - double(ref[i]));
+            gmax_ig = std::max(gmax_ig, d); gsum_ig += d;
+            if (got_ig[i] != got[i]) exact += 1;
+        }
+        double rel_ig = gsum_ig / std::max(rsum, 1e-30);
+        // fp16 upper bound: same kernel, W already dequantized (dWf still holds it).
+        // ms_ig/ms_f16 is the true in-GEMM decode overhead.
+        auto launch_f16 = [&] {
+            qgemm<fp16_raw><<<grid, 64>>>(dY, dX, reinterpret_cast<const uint8_t*>(dWf), M, N, K);
+        };
+        launch_f16();
+        hipDeviceSynchronize();
+        hipEventRecord(t0);
+        for (int i = 0; i < iters; i++) launch_f16();
+        hipEventRecord(t1); hipEventSynchronize(t1);
+        float ms_f16; hipEventElapsedTime(&ms_f16, t0, t1); ms_f16 /= iters;
+
+        printf("qgemm[in-gemm]:  rel %.4f%% max %.4g | %.3f ms  %.2f TFLOP/s  "
+               "(%s)  vs-dequant-route %.2fx  decode-overhead %.2fx  bitdiff %.0f/%zu\n",
+               100 * rel_ig, gmax_ig, ms_ig, tflop / (ms_ig / 1e3),
+               rel_ig < 0.02 ? "PASS" : "FAIL", ms / ms_ig, ms_ig / ms_f16,
+               exact, got_ig.size());
+        if (rel_ig >= 0.02) rc = 1;
+    }
+
     // ---- ksplit variant: K sliced across blockIdx.z + fp32 atomic combine ----
     {
         const int chunk = qgemm_pick_kchunk(M, N, K, SUPERBLOCK ? 16 : FMT::block_k);
@@ -301,6 +165,37 @@ int run(const std::string& dir, int N, int K, int M) {
                splits, SUPERBLOCK ? "[dequant-route]" : "", 100 * rel, gmax, ms,
                tflop / (ms / 1e3), rel < 0.02 ? "PASS" : "FAIL");
         rc |= !(rel < 0.02);
+
+        // in-GEMM ksplit: the decode-shape serving path (K-slice restores
+        // occupancy; the fragment decodes straight from the packed weights).
+        if constexpr (SUPERBLOCK) {
+            const int chunk_ig = qgemm_pick_kchunk(M, N, K, FMT::block_k);
+            const int splits_ig = (K + chunk_ig - 1) / chunk_ig;
+            dim3 gridz_ig(N / 16, (M + 15) / 16, splits_ig);
+            auto launch_igk = [&] {
+                hipMemsetAsync(dY, 0, sizeof(float) * size_t(M) * N);
+                qgemm_ksplit<FMT><<<gridz_ig, 64>>>(dY, dX, dWq, M, N, K, chunk_ig);
+            };
+            launch_igk();
+            hipDeviceSynchronize();
+            if (hipGetLastError() != hipSuccess) { printf("IN-GEMM KSPLIT ERROR\n"); return 1; }
+            hipEventRecord(t0);
+            for (int i = 0; i < iters; i++) launch_igk();
+            hipEventRecord(t1); hipEventSynchronize(t1);
+            float ms_igk; hipEventElapsedTime(&ms_igk, t0, t1); ms_igk /= iters;
+            hipMemcpy(got.data(), dY, sizeof(float) * got.size(), hipMemcpyDeviceToHost);
+            double gs = 0, gm = 0;
+            for (size_t i = 0; i < got.size(); i++) {
+                double d = std::abs(double(got[i]) - double(ref[i]));
+                gm = std::max(gm, d); gs += d;
+            }
+            double rel_igk = gs / std::max(rsum, 1e-30);
+            printf("qgemm-ksplit(x%d)[in-gemm]: rel %.4f%% max %.4g | %.3f ms  "
+                   "%.2f TFLOP/s  (%s)\n",
+                   splits_ig, 100 * rel_igk, gm, ms_igk, tflop / (ms_igk / 1e3),
+                   rel_igk < 0.02 ? "PASS" : "FAIL");
+            rc |= !(rel_igk < 0.02);
+        }
     }
 
     // ---- wide N-tile variant: golden-validate at NT=4 (the golden dir is the
