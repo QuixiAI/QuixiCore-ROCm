@@ -262,6 +262,165 @@ int main() {
         report("moe_grouped_gemm square (spot fp64)", err < 5e-6, err);
     }
 
+    // ---------------- Phase 4: MoE completeness ----------------
+    // moe_route_grouped vs a host replica of the CPU reference (sigmoid scoring,
+    // selection bias, group top-two ranking, renormalize x routed_scale).
+    {
+        const int T4 = 24, E4 = 16, K4 = 4, G4 = 4, TG4 = 2;
+        const float rscale = 2.5f;
+        std::vector<float> lg((size_t)T4 * E4), bs(E4);
+        for (auto& v : lg) v = randv(1,-3.f, 3.f)[0];
+        for (auto& v : bs) v = randv(1,-0.2f, 0.2f)[0];
+        float *dlg = dnew(lg), *dbs = dnew(bs);
+        int* did4 = dzero<int>((size_t)T4 * K4);
+        float* dwt4 = dzero<float>((size_t)T4 * K4);
+        moe_route_grouped<float><<<T4, 32, 2 * E4 * sizeof(float)>>>(
+            dlg, dbs, did4, dwt4, E4, K4, G4, TG4, 1, rscale, MOE_SCORE_SIGMOID);
+        CUCHECK(hipDeviceSynchronize());
+        auto gid = d2h(did4, (size_t)T4 * K4);
+        auto gwt = d2h(dwt4, (size_t)T4 * K4);
+
+        long mism = 0; double werr = 0;
+        const int gsz = E4 / G4;
+        for (int t = 0; t < T4; ++t) {
+            std::vector<double> sc(E4), sel(E4);
+            for (int e = 0; e < E4; ++e) {
+                sc[e] = 1.0 / (1.0 + std::exp(-(double)lg[(size_t)t * E4 + e]));
+                sel[e] = sc[e] + bs[e];
+            }
+            std::vector<int> gord(G4);
+            for (int g = 0; g < G4; ++g) gord[g] = g;
+            auto top2 = [&](int g) {
+                double f = -1e300, s = -1e300;
+                for (int i = 0; i < gsz; ++i) {
+                    double v = sel[(size_t)g * gsz + i];
+                    if (v > f) { s = f; f = v; } else if (v > s) s = v;
+                }
+                return f + (gsz > 1 ? s : 0.0);
+            };
+            std::stable_sort(gord.begin(), gord.end(), [&](int a, int b) {
+                double la = top2(a), lb = top2(b);
+                return la == lb ? a < b : la > lb; });
+            std::vector<int> cand;
+            for (int r = 0; r < TG4; ++r)
+                for (int i = 0; i < gsz; ++i) cand.push_back(gord[r] * gsz + i);
+            std::partial_sort(cand.begin(), cand.begin() + K4, cand.end(), [&](int a, int b) {
+                return sel[a] == sel[b] ? a < b : sel[a] > sel[b]; });
+            double den = 0;
+            for (int k = 0; k < K4; ++k) den += sc[cand[k]];
+            for (int k = 0; k < K4; ++k) {
+                mism += gid[(size_t)t * K4 + k] != cand[k];
+                werr = std::max(werr, std::abs((double)gwt[(size_t)t * K4 + k]
+                                               - sc[cand[k]] * rscale / den));
+            }
+        }
+        printf("%-34s %s (%ld id mism, w err %.3e)\n", "moe_route_grouped",
+               (mism == 0 && werr < 1e-5) ? "PASS" : "FAIL", mism, werr);
+        g_fail += !(mism == 0 && werr < 1e-5);
+    }
+
+    // moe_gather_backward: scatter-add with repeats and -1 padding.
+    {
+        const int TOK = 16, GR = 40, D = 32;
+        std::vector<float> gg((size_t)GR * D);
+        for (auto& v : gg) v = randv(1,-1.f, 1.f)[0];
+        std::vector<int> rows(GR);
+        for (int r = 0; r < GR; ++r) rows[r] = (r % 7 == 0) ? -1 : (r * 5) % TOK;
+        float* dgg = dnew(gg); int* drow = dnew(rows);
+        float* dgi = dzero<float>((size_t)TOK * D);
+        moe_gather_backward<float><<<GR, 128>>>(dgg, drow, dgi, GR, D);
+        CUCHECK(hipDeviceSynchronize());
+        auto got = d2h(dgi, (size_t)TOK * D);
+        std::vector<double> ref((size_t)TOK * D, 0.0);
+        for (int r = 0; r < GR; ++r)
+            if (rows[r] >= 0)
+                for (int i = 0; i < D; ++i) ref[(size_t)rows[r] * D + i] += gg[(size_t)r * D + i];
+        double err = 0;
+        for (size_t i = 0; i < ref.size(); ++i)
+            err = std::max(err, std::abs((double)got[i] - ref[i]) / std::max(1.0, std::abs(ref[i])));
+        report("moe_gather_backward (fp64)", err < 1e-6, err);
+    }
+
+    // moe_finalize_backward: adjoint of the weighted combine.
+    {
+        const int TOK = 8, KK = 2, D = 16, R = TOK * KK;
+        std::vector<float> go((size_t)TOK * D), eo((size_t)R * D), ew(R);
+        for (auto& v : go) v = randv(1,-1.f, 1.f)[0];
+        for (auto& v : eo) v = randv(1,-1.f, 1.f)[0];
+        for (auto& v : ew) v = randv(1,0.1f, 1.f)[0];
+        std::vector<int> inv(R);
+        for (int i = 0; i < R; ++i) inv[i] = (i * 3 + 1) % R;   // a permutation for R=16
+        float* dgo = dnew(go); float* deo = dnew(eo); float* dew = dnew(ew);
+        int* dinv4 = dnew(inv);
+        float* dgeo = dzero<float>((size_t)R * D);
+        float* dgew = dzero<float>(R);
+        moe_finalize_backward<float><<<TOK, 32>>>(dgo, deo, dinv4, dew, dgeo, dgew, KK, D);
+        CUCHECK(hipDeviceSynchronize());
+        auto geo = d2h(dgeo, (size_t)R * D); auto gew = d2h(dgew, R);
+        std::vector<double> reo((size_t)R * D, 0.0), rew(R, 0.0);
+        for (int t = 0; t < TOK; ++t)
+            for (int k = 0; k < KK; ++k) {
+                const int rt = t * KK + k, p = inv[rt];
+                double wg = 0;
+                for (int i = 0; i < D; ++i) {
+                    const double g = go[(size_t)t * D + i];
+                    reo[(size_t)p * D + i] += ew[rt] * g;
+                    wg += g * eo[(size_t)p * D + i];
+                }
+                rew[rt] = wg;
+            }
+        double err = 0;
+        for (size_t i = 0; i < reo.size(); ++i)
+            err = std::max(err, std::abs((double)geo[i] - reo[i]) / std::max(1.0, std::abs(reo[i])));
+        for (int i = 0; i < R; ++i)
+            err = std::max(err, std::abs((double)gew[i] - rew[i]) / std::max(1.0, std::abs(rew[i])));
+        report("moe_finalize_backward (fp64)", err < 1e-6, err);
+    }
+
+    // moe_grouped_gemm backward wrt input and wrt weights.
+    {
+        const int R = 20, EE = 3, KI = 24, NO = 12;
+        std::vector<float> xx((size_t)R * KI), go((size_t)R * NO),
+                           ww((size_t)EE * KI * NO);
+        for (auto& v : xx) v = randv(1,-1.f, 1.f)[0];
+        for (auto& v : go) v = randv(1,-1.f, 1.f)[0];
+        for (auto& v : ww) v = randv(1,-1.f, 1.f)[0];
+        std::vector<int> eid(R);
+        for (int r = 0; r < R; ++r) eid[r] = (r == R - 1) ? -1 : r % EE;   // last row padded
+        float* dx4 = dnew(xx); float* dgo = dnew(go); float* dw4 = dnew(ww);
+        int* deid = dnew(eid);
+        float* dgi = dzero<float>((size_t)R * KI);
+        float* dgw = dzero<float>((size_t)EE * KI * NO);
+        moe_grouped_gemm_backward_input<float><<<R, 128>>>(dgo, dw4, deid, dgi, R, KI, NO);
+        moe_grouped_gemm_backward_weight<float><<<R, 256>>>(dx4, dgo, deid, dgw, R, KI, NO);
+        CUCHECK(hipDeviceSynchronize());
+        auto gi = d2h(dgi, (size_t)R * KI); auto gw = d2h(dgw, (size_t)EE * KI * NO);
+        double ei = 0, ew2 = 0;
+        for (int r = 0; r < R; ++r) {
+            if (eid[r] < 0) continue;
+            for (int i = 0; i < KI; ++i) {
+                double acc = 0;
+                for (int o = 0; o < NO; ++o)
+                    acc += (double)go[(size_t)r * NO + o]
+                         * ww[((size_t)eid[r] * KI + i) * NO + o];
+                ei = std::max(ei, std::abs((double)gi[(size_t)r * KI + i] - acc)
+                                  / std::max(1.0, std::abs(acc)));
+            }
+        }
+        std::vector<double> rw((size_t)EE * KI * NO, 0.0);
+        for (int r = 0; r < R; ++r) {
+            if (eid[r] < 0) continue;
+            for (int i = 0; i < KI; ++i)
+                for (int o = 0; o < NO; ++o)
+                    rw[((size_t)eid[r] * KI + i) * NO + o] +=
+                        (double)xx[(size_t)r * KI + i] * go[(size_t)r * NO + o];
+        }
+        for (size_t i = 0; i < rw.size(); ++i)
+            ew2 = std::max(ew2, std::abs((double)gw[i] - rw[i]) / std::max(1.0, std::abs(rw[i])));
+        report("moe_grouped_gemm_backward_input (fp64)", ei < 1e-6, ei);
+        report("moe_grouped_gemm_backward_weight (fp64)", ew2 < 1e-6, ew2);
+    }
+
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL PASS", g_fail);
     return g_fail ? 1 : 0;
 }

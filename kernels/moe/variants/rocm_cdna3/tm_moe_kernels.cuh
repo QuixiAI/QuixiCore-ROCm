@@ -263,4 +263,187 @@ __global__ void moe_finalize(const T* __restrict__ expert_out, const int* __rest
     }
 }
 
+// ================= Phase 4: MoE completeness (Metal/CPU parity) =================
+// These take ROW-SHAPED expert ids (one per padded row, -1 = padding) rather
+// than the per-tile expert_of_tile the forward grouped GEMMs use, matching the
+// CPU sibling contract. Accumulating kernels (gather_backward,
+// finalize_backward, grouped_gemm_backward_weight) require their destination
+// zeroed by the caller, exactly as the CPU reference fills before accumulating.
+
+enum MoeScoring { MOE_SCORE_SOFTMAX = 0, MOE_SCORE_SIGMOID = 1, MOE_SCORE_SQRT_SOFTPLUS = 2 };
+#define MOE_MAX_GROUPS 64
+
+// Grouped top-k routing ("noaux_tc"): score the logits, add a per-expert
+// selection bias, rank expert GROUPS by the sum of their top two biased scores,
+// keep the best `top_groups`, then top-k experts within that candidate set.
+// Emitted weights are the UNBIASED scores of the winners, optionally
+// renormalized over the selection, times routed_scale. Ties break to the lower
+// id at both levels. One 32-lane block per token; smem holds scores+selection.
+template <typename T>
+__global__ void moe_route_grouped(const T* __restrict__ logits,
+                                  const float* __restrict__ bias,
+                                  int* __restrict__ topk_ids,
+                                  float* __restrict__ topk_weights,
+                                  int E, int K, int groups, int top_groups,
+                                  int renormalize, float routed_scale, int scoring) {
+    extern __shared__ float smem[];
+    float* score = smem;            // [E] unbiased score
+    float* select = smem + E;       // [E] score + bias
+    __shared__ unsigned char gkeep[MOE_MAX_GROUPS];
+    const int lane = threadIdx.x;
+    const long base = (long)blockIdx.x * E;
+
+    if (scoring == MOE_SCORE_SOFTMAX) {
+        float m = MOE_NEG_INF;
+        for (int e = lane; e < E; e += 32) m = fmaxf(m, mtf(logits[base + e]));
+        #pragma unroll
+        for (int off = 16; off > 0; off >>= 1) m = fmaxf(m, __shfl_xor(m, off));
+        float s = 0.0f;
+        for (int e = lane; e < E; e += 32) { const float v = expf(mtf(logits[base + e]) - m);
+                                             score[e] = v; s += v; }
+        s = tms::warp_sum_f(s);
+        const float inv = 1.0f / s;
+        for (int e = lane; e < E; e += 32) score[e] *= inv;
+    } else {
+        for (int e = lane; e < E; e += 32) {
+            const float v = mtf(logits[base + e]);
+            score[e] = (scoring == MOE_SCORE_SIGMOID) ? 1.0f / (1.0f + expf(-v))
+                                                      : sqrtf(log1pf(expf(-fabsf(v))) + fmaxf(v, 0.0f));
+        }
+    }
+    for (int e = lane; e < E; e += 32) select[e] = score[e] + (bias ? bias[e] : 0.0f);
+    __syncthreads();
+
+    // Group ranking on one lane: `groups` is small (<= MOE_MAX_GROUPS) and the
+    // top-two-sum + stable tie rule is cheapest done serially.
+    if (lane == 0) {
+        const int gsz = E / groups;
+        float gs[MOE_MAX_GROUPS];
+        for (int g = 0; g < groups; ++g) {
+            float f = MOE_NEG_INF, sd = MOE_NEG_INF;
+            for (int i = 0; i < gsz; ++i) {
+                const float v = select[g * gsz + i];
+                if (v > f) { sd = f; f = v; } else if (v > sd) { sd = v; }
+            }
+            gs[g] = f + (gsz > 1 ? sd : 0.0f);
+        }
+        for (int g = 0; g < groups; ++g) gkeep[g] = 0;
+        for (int r = 0; r < top_groups; ++r) {
+            int best = -1;
+            for (int g = 0; g < groups; ++g) {
+                if (gkeep[g]) continue;
+                if (best < 0 || gs[g] > gs[best]) best = g;   // ties -> lower id
+            }
+            gkeep[best] = 1;
+        }
+    }
+    __syncthreads();
+
+    const int gsz = E / groups;
+    int chosen_id[MOE_MAX_K];
+    float chosen_val[MOE_MAX_K];
+    auto cand = [&](int idx, int& id, float& v, bool& valid) {
+        id = idx; v = select[idx]; valid = gkeep[idx / gsz] != 0;
+    };
+    masked_topk(cand, E, K, lane, MOE_NEG_INF, chosen_id, chosen_val);
+
+    if (lane == 0) {
+        float denom = 0.0f;
+        for (int k = 0; k < K; ++k) denom += score[chosen_id[k]];
+        const float f = renormalize ? routed_scale / denom : routed_scale;
+        const long ob = (long)blockIdx.x * K;
+        for (int k = 0; k < K; ++k) {
+            topk_ids[ob + k] = chosen_id[k];
+            topk_weights[ob + k] = score[chosen_id[k]] * f;
+        }
+    }
+}
+
+// Adjoint of moe_gather: scatter-add each gathered row back to its source
+// token. gather_rows[r] < 0 marks a padded row and contributes nothing.
+// Rows can repeat (a token feeds several experts), so this accumulates.
+template <typename T>
+__global__ void moe_gather_backward(const T* __restrict__ grad_gathered,
+                                    const int* __restrict__ gather_rows,
+                                    float* __restrict__ grad_input,
+                                    int gathered_rows, int dim) {
+    const int r = blockIdx.x;
+    if (r >= gathered_rows) return;
+    const int src = gather_rows[r];
+    if (src < 0) return;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x)
+        atomicAdd(&grad_input[(long)src * dim + i], mtf(grad_gathered[(long)r * dim + i]));
+}
+
+// Adjoint of moe_finalize. grad_expert_out[inverse[route]] += w[route]*grad_out,
+// and grad_expert_weights[route] = <grad_out[token], expert_out[inverse[route]]>.
+template <typename T>
+__global__ void moe_finalize_backward(const T* __restrict__ grad_out,
+                                      const T* __restrict__ expert_out,
+                                      const int* __restrict__ inverse,
+                                      const float* __restrict__ expert_weights,
+                                      float* __restrict__ grad_expert_out,
+                                      float* __restrict__ grad_expert_weights,
+                                      int top_k, int dim) {
+    const int token = blockIdx.x;
+    const int lane = threadIdx.x;
+    for (int k = 0; k < top_k; ++k) {
+        const long route = (long)token * top_k + k;
+        const int p = inverse[route];
+        if (p < 0) continue;
+        const float w = expert_weights[route];
+        float wg = 0.0f;
+        for (int i = lane; i < dim; i += blockDim.x) {
+            const float g = mtf(grad_out[(long)token * dim + i]);
+            atomicAdd(&grad_expert_out[(long)p * dim + i], w * g);
+            wg += g * mtf(expert_out[(long)p * dim + i]);
+        }
+        wg = tms::warp_sum_f(wg);
+        if (lane == 0) grad_expert_weights[route] = wg;
+    }
+}
+
+// Adjoint w.r.t. the input of the row-indexed expert GEMM. W is [E, K_in, N_out]
+// (input-major, matching moe_grouped_gemm_rect), so this contracts over N_out.
+template <typename T>
+__global__ void moe_grouped_gemm_backward_input(const T* __restrict__ grad_out,
+                                                const T* __restrict__ W,
+                                                const int* __restrict__ expert_ids,
+                                                float* __restrict__ grad_input,
+                                                int rows, int K_in, int N_out) {
+    const int r = blockIdx.x;
+    if (r >= rows) return;
+    const int e = expert_ids[r];
+    if (e < 0) return;
+    const T* We = W + (long)e * K_in * N_out;
+    const T* grow = grad_out + (long)r * N_out;
+    for (int i = threadIdx.x; i < K_in; i += blockDim.x) {
+        float acc = 0.0f;
+        for (int o = 0; o < N_out; ++o) acc += mtf(grow[o]) * mtf(We[(long)i * N_out + o]);
+        grad_input[(long)r * K_in + i] = acc;
+    }
+}
+
+// Adjoint w.r.t. the weights: accumulate the outer product x[r] (x) grad_out[r]
+// into the expert that row r was routed to. Rows sharing an expert collide, so
+// this accumulates; caller zeroes grad_weights.
+template <typename T>
+__global__ void moe_grouped_gemm_backward_weight(const T* __restrict__ x,
+                                                 const T* __restrict__ grad_out,
+                                                 const int* __restrict__ expert_ids,
+                                                 float* __restrict__ grad_weights,
+                                                 int rows, int K_in, int N_out) {
+    const int r = blockIdx.x;
+    if (r >= rows) return;
+    const int e = expert_ids[r];
+    if (e < 0) return;
+    float* ge = grad_weights + (long)e * K_in * N_out;
+    const T* xr = x + (long)r * K_in;
+    const T* gr = grad_out + (long)r * N_out;
+    for (long t = threadIdx.x; t < (long)K_in * N_out; t += blockDim.x) {
+        const int i = (int)(t / N_out), o = (int)(t % N_out);
+        atomicAdd(&ge[t], mtf(xr[i]) * mtf(gr[o]));
+    }
+}
+
 } // namespace tmoe
