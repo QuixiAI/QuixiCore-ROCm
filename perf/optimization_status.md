@@ -2246,3 +2246,28 @@ max regardless — a reminder that a test whose expected value is insensitive to
 the mutation proves nothing about it.
 
 Baseline: none; functional port, no speedup claimed.
+
+## 2026-07-26: turboquant_query_transform (Phase 2, 11/17) — LANDED
+
+Status: landed (correctness-first port; no speedup claimed).
+
+`kernels/quantization/turboquant_query/variants/rocm_cdna3`. Sign flip against a
+shared `signs` vector, unnormalized FWHT, then a single 1/sqrt(head_size).
+head_size 64 / 128 / 256. One block per (row, head), blockDim == head_size,
+transform in shared memory.
+
+The FWHT is the plain a+b / a-b recurrence with NO per-stage 1/sqrt(2). Folding
+the normalization into each stage is the usual orthonormal variant and gives a
+different answer; the reference normalizes exactly once at the end.
+
+Correctness: **bit-exact** at all three head sizes — 0 of 7104 / 10752 / 5632
+elements differ, worst absolute difference 0. Exactness is the right bar here
+and a tolerance would have hidden a real bug: every butterfly in a stage reads a
+disjoint pair and writes those same two slots, so the answer cannot depend on
+thread order, unlike the reduction-based kernels in this tree.
+
+Mutation-verified: flipping one butterfly output (a-b -> b-a) fails with exactly
+half the elements differing at every head size — the signature a sign error
+should produce.
+
+Baseline: none; functional port, no speedup claimed.
