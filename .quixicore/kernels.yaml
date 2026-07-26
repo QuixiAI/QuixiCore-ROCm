@@ -265,6 +265,390 @@ operations:
         status: implemented
         path: kernels/activations/phase10_training/variants/rocm_cdna3
 
+  unary:
+    family: activations
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    notes: Phase 11 unary dispatch covering all 22 CPU UnaryOp selectors.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  sigmoid_mul:
+    family: activations
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  sigmoid_mul_backward:
+    family: activations
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  value_clip:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  clamp:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  leaky_relu:
+    family: activations
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  group_norm:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  l2_normalize:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  add_id:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  add_scalar:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  multiply:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  divide:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  subtract:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  scale:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  square:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  square_root:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  sine:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  cosine:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  logarithm:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  accumulate:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  reduce_mean:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  reduce_sum_all:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  cumulative_sum:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  count_equal:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  arange:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  fill:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  concat:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  repeat_2d:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  repeat_backward_2d:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  pad_2d:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  pad_reflect_1d:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  roll_2d:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  set_rows:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    notes: Phase 11 deterministic destination-owned route preserving CPU order for duplicate row ids.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  tensor_copy:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  tensor_set_4d:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    notes: Phase 11 deterministic destination-owned route preserving CPU loop order for overlapping strided updates.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  diag_embed:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  diag_mask:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    notes: Phase 11 diagonal causal mask with zero and negative-infinity fill coverage.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  triangular_fill:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  argsort:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    notes: Phase 11 stable row argsort with CPU tie preservation for width <= 128.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  outer_product:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  solve_lower_triangular:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  threshold_topk_indices:
+    family: utils
+    status: implemented
+    path: kernels/utils/phase11_tensor_ops
+    notes: Phase 11 top-k index thresholding with CPU first-greater-then-equal tie order for width <= 128.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
   qgemv:
     family: quantization
     status: imported

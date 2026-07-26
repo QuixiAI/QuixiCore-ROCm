@@ -2519,3 +2519,50 @@ scans the sparse teacher corrections from each dense student element so
 duplicate top-k indices cannot race.
 
 Raw results: `perf/results/2026-07-26/phase10-training-final2/bench.txt`.
+
+## 2026-07-26: Elementwise And Tensor-Op Surface Phase 11 - LANDED
+
+Status: landed.
+
+Current implementation: `kernels/utils/phase11_tensor_ops/variants/rocm_cdna3`.
+Current public route: Phase 11 operation entries in `.quixicore/kernels.yaml`
+from `unary` through `threshold_topk_indices`.
+
+References inspected: CPU `utils/tensor_ops_ref.cpp`,
+`activations/activations_ref.cpp`, `sampling/selection_ref.cpp`, and
+`vision/conv_pool_ref.cpp`; Metal `activations/gelu` and `activations/glu`.
+
+Correctness: `make -C kernels/utils/phase11_tensor_ops/variants/rocm_cdna3 test`
+and archived `bench` both report `ALL PASS`. The harness has 66 checks covering
+all 22 unary selectors, sigmoid multiply forward/backward, scalar/binary
+elementwise ops, row reductions and normalization, concat/repeat/pad/roll,
+diagonal and triangular masks, add-id, copy/set utilities, stable argsort,
+top-k threshold indices, outer product, and lower-triangular solve.
+
+Baseline and experiments on MI300X gfx942, ROCm 7.2.4, HIP 7.2.53211,
+bare metal, command
+`HIP_VISIBLE_DEVICES=0 make -C kernels/utils/phase11_tensor_ops/variants/rocm_cdna3 bench`.
+Benchmarks used printed warmups/iterations; fast kernels use repeated launches
+per timing sample and report per-launch medians.
+
+| route / shape | baseline | candidate/current | decision |
+| --- | ---: | ---: | --- |
+| `unary`, fp32 1048576 values, representative SiLU | scalar 309.8369 ms | elementwise 0.0048 ms, 1757.2 GB/s, 64902.59x | keep elementwise dispatch |
+| binary arithmetic (`multiply`/`divide`/`subtract`), fp32 1048576 values | scalar 156.3962 ms | elementwise 0.0047 ms, 2678.7 GB/s, 33294.06x | keep elementwise dispatch |
+| scalar/value elementwise (`value_clip`, `clamp`, `leaky_relu`, `add_scalar`, `scale`, `square`, `square_root`, `sine`, `cosine`, `logarithm`, `fill`, `arange`, `accumulate`), fp32 1048576 values | scalar 239.7500 ms | elementwise 0.0047 ms, 1787.3 GB/s, 51082.42x | keep elementwise dispatch |
+| `sigmoid_mul`, fp32 1048576 values | scalar 250.3913 ms | elementwise 0.0047 ms, 2675.4 GB/s, 53238.38x | keep elementwise dispatch |
+| `reduce_mean`, fp32 rows=4096,dim=256 | scalar 70.1483 ms | row-block 0.0053 ms, 800.9 GB/s, 13342.47x | keep row-block route |
+| `l2_normalize`, fp32 rows=4096,dim=256 | scalar 209.7034 ms | row-block 0.0066 ms, 1262.3 GB/s, 31554.84x | keep row-block route |
+| `group_norm`, fp32 batch=512,channels=16,spatial=64,groups=4 | scalar 134.2496 ms | group-block 0.0066 ms, 637.7 GB/s, 20411.56x | keep group-block route |
+| `argsort`, fp32 rows=4096,dim=64 | scalar 1218.8877 ms | row-owned stable sort 0.7448 ms, 2.8 GB/s, 1636.54x | keep row-owned route |
+| `threshold_topk_indices`, fp32 rows=4096,width=64,k=8 | scalar 773.6021 ms | row-owned top-k 0.4302 ms, 2.7 GB/s, 1798.22x | keep row-owned route |
+| layout/copy transforms (`concat`, `repeat_2d`, `repeat_backward_2d`, `pad_2d`, `pad_reflect_1d`, `roll_2d`, `add_id`, `tensor_copy`, `tensor_set_4d`, `diag_embed`, `diag_mask`, `triangular_fill`, `outer_product`, `solve_lower_triangular`) | scalar copy 131.9064 ms | parallel copy/layout route 0.0039 ms, 2159.9 GB/s, 33962.86x | keep direct routes |
+
+Decision: KEEP the Phase 11 ports. The operation families are simple enough
+that one direct elementwise or row-owned route is the best correctness/perf
+tradeoff. Stable sort and top-k are deliberately bounded to width <= 128 in this
+variant, matching the current parity harness and avoiding unbounded device
+stack use; `set_rows` and `tensor_set_4d` preserve CPU last-writer order by
+scanning from the destination side.
+
+Raw results: `perf/results/2026-07-26/phase11-tensor-ops-final4/bench.txt`.

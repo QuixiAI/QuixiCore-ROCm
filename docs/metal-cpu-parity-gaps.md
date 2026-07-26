@@ -51,10 +51,10 @@ the kernel; a missing entry does not.
 | 8 | Linear attention | 9 | 0 | 0 | **9** |
 | 9 | State-space & hyper-connections | 6 | 0 | 0 | **6** |
 | 10 | Training & distillation | 10 | 0 | 0 | **10** |
-| 11 | Elementwise & tensor-op surface | 42 | 42 | 0 | 0 |
+| 11 | Elementwise & tensor-op surface | 42 | 0 | 0 | **42** |
 | 12 | Convolution & audio | 16 | 16 | 0 | 0 |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **83** | **0** | **95** |
+| | **Total** | **178** | **41** | **0** | **137** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -374,58 +374,60 @@ backward. Raw benchmark output is archived under
 
 ## Phase 11 — Elementwise And Tensor-Op Surface (42)
 
-Highest kernel count, lowest per-kernel risk. Nearly all of it comes from
-`../QuixiCore-CPU/kernels/utils/tensor_ops_ref.cpp`.
+Landed in `kernels/utils/phase11_tensor_ops/variants/rocm_cdna3`. The harness
+enumerates all 22 `unary` selectors explicitly and covers the tensor utility
+surface with direct elementwise grids, row reductions, stable row-owned sorting,
+and deterministic destination-owned scans where CPU loop order matters.
 
-`unary` is one templated dispatch covering all 22 llama selectors; top-level
-coverage must not hide a missing activation mode, so its harness enumerates all
-22 explicitly. Operations are grouped into a small number of `.cu` files by
-shape class, but each carries its own perf run.
+2026-07-26 update: the Phase 11 harness reports `ALL PASS` for 66 checks,
+including both `diag_mask` fill modes, stable ascending/descending `argsort`,
+duplicate-row `set_rows`, and lower-triangular solve. Raw benchmark output is
+archived under `perf/results/2026-07-26/phase11-tensor-ops-final4/`.
 
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `unary` (22 selectors) | `utils/tensor_ops_ref.cpp` | `activations/gelu` | planned |
-| `sigmoid_mul` | `activations/activations_ref.cpp` | `activations/glu` | planned |
-| `sigmoid_mul_backward` | `activations/activations_ref.cpp` | `activations/glu` | planned |
-| `value_clip` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `clamp` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `leaky_relu` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `group_norm` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `l2_normalize` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `add_id` | `vision/conv_pool_ref.cpp` | — | planned |
-| `add_scalar` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `multiply` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `divide` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `subtract` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `scale` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `square` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `square_root` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `sine` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `cosine` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `logarithm` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `accumulate` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `reduce_mean` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `reduce_sum_all` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `cumulative_sum` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `count_equal` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `arange` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `fill` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `concat` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `repeat_2d` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `repeat_backward_2d` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `pad_2d` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `pad_reflect_1d` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `roll_2d` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `set_rows` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `tensor_copy` | `vision/conv_pool_ref.cpp` | — | planned |
-| `tensor_set_4d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `diag_embed` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `diag_mask` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `triangular_fill` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `argsort` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `outer_product` | `utils/tensor_ops_ref.cpp` | — | planned |
-| `solve_lower_triangular` | `vision/conv_pool_ref.cpp` | — | planned |
-| `threshold_topk_indices` | `utils/utils_extended_ref.cpp` | — | planned |
+| `unary` (22 selectors) | `utils/tensor_ops_ref.cpp` | `activations/gelu` | **landed** |
+| `sigmoid_mul` | `activations/activations_ref.cpp` | `activations/glu` | **landed** |
+| `sigmoid_mul_backward` | `activations/activations_ref.cpp` | `activations/glu` | **landed** |
+| `value_clip` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `clamp` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `leaky_relu` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `group_norm` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `l2_normalize` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `add_id` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `add_scalar` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `multiply` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `divide` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `subtract` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `scale` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `square` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `square_root` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `sine` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `cosine` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `logarithm` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `accumulate` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `reduce_mean` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `reduce_sum_all` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `cumulative_sum` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `count_equal` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `arange` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `fill` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `concat` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `repeat_2d` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `repeat_backward_2d` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `pad_2d` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `pad_reflect_1d` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `roll_2d` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `set_rows` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `tensor_copy` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `tensor_set_4d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `diag_embed` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `diag_mask` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `triangular_fill` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `argsort` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `outer_product` | `utils/tensor_ops_ref.cpp` | — | **landed** |
+| `solve_lower_triangular` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `threshold_topk_indices` | `utils/utils_extended_ref.cpp` | — | **landed** |
 
 ## Phase 12 — Convolution And Audio (16)
 
