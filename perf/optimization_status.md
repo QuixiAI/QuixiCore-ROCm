@@ -1659,11 +1659,69 @@ lever for grouped GEMM. Decode is latency-shaped and benefits from a wavefront
 per output; grouped GEMM's tile shape is better served by the scalar
 one-thread-per-output route until it is replaced by a real MFMA/LDS design.
 
-Open questions: generic packed epilogues for `q4_0`, `q6_K`, `mxfp8`,
-`nvfp4`, and `mxfp4`; MFMA/LDS dense prefill route if these decode epilogues
-are ever routed for large batches.
+Open questions: MFMA/LDS dense prefill route if these decode epilogues are ever
+routed for large batches.
 
 Raw results: `perf/results/2026-07-26/matmul-decode_epilogues-phase3-final/`.
+
+## 2026-07-26: matmul-decode_epilogues packed Phase 3 completion
+
+Status: landed.
+
+Current implementation: `kernels/matmul/decode_epilogues/variants/rocm_cdna3`.
+Current public route: `.quixicore/kernels.yaml` operations
+`decode_linear_epilogue_packed` and `decode_swiglu_packed`.
+
+References inspected: `../QuixiCore-CPU/kernels/matmul/matmul_extended_ref.cpp`,
+`../QuixiCore-Metal/kernels/matmul/decode_linear/decode_linear.metal`,
+`../QuixiCore-Metal/bindings/python/tk/quant.py`,
+`kernels/quantization/qgemv/variants/rocm_cdna3/quant_formats.cuh`,
+`kernels/quantization/qgemv/variants/rocm_cdna3/quant_formats_tables.cuh`,
+and `kernels/common/cdna3_harness.cuh`.
+
+Correctness: **ALL PASS** on MI300X. The standalone harness checks 24 result
+lines against fp64 or byte-layout-aware packed host oracles. The new packed
+coverage validates `decode_linear_epilogue_packed` and `decode_swiglu_packed`
+for `q4_0`, `q8_0`, `q6_K`, `mxfp8`, `nvfp4`, and `mxfp4`, rows=2,
+input_dim=512, output_dim=35, fp32 output, optional bias/residual/activation
+where applicable. Tolerance: harness `Tol::fp32`.
+
+Baseline 1: scalar one-thread-per-output `decode_linear_epilogue_packed`
+`mxfp4`, rows=64, input_dim=4096, output_dim=1024, fp32, GELU+bias+residual.
+Median 1.1557 ms, 0.5 TFLOP/s, min 1.1503 ms, max 1.1754 ms, spread 1.02x.
+
+Experiment 1: one factor changed: split each packed dot product across one
+64-lane CDNA3 wavefront and reduce with `qc::wave_reduce_sum`. Candidate median
+0.2086 ms, 2.6 TFLOP/s, min 0.2047 ms, max 0.2180 ms, spread 1.07x,
+**5.54x** faster than the scalar baseline. Keep wave64.
+
+Baseline 2: scalar one-thread-per-output `decode_swiglu_packed` `mxfp4`,
+rows=64, input_dim=4096, output_dim=1024, fp32, bias enabled. Median
+4.1934 ms, 0.3 TFLOP/s, min 4.1354 ms, max 4.2707 ms, spread 1.03x.
+
+Experiment 2: same wave64 split-dot lever for the two packed SwiGLU
+projections. Candidate median 0.3587 ms, 3.0 TFLOP/s, min 0.3483 ms,
+max 0.3994 ms, spread 1.15x, **11.69x** faster than the scalar baseline.
+Keep wave64.
+
+Environment:
+  GPU: AMD Instinct MI300X (gfx942), device index 0
+  ROCm: 7.2.4   HIP: 7.2.53211-97f5574fe2
+  Container: bare metal (no container)
+  Commit: 0335ef9d (working tree dirty)
+  Command: `HIP_VISIBLE_DEVICES=0 make -C kernels/matmul/decode_epilogues/variants/rocm_cdna3 bench`
+  Warmups/iterations: correctness once, performance w10/i50 with HIP-event median.
+
+Decision: **KEEP** the wave64 packed epilogue implementation for both linear
+and SwiGLU packed decode paths. The same split-dot factor is a clear win on the
+representative `mxfp4` packed path and all six packed formats pass the
+format-aware oracle.
+
+Open questions: broader format-by-format packed performance sweeps and a real
+MFMA/LDS dense prefill route for large-batch matmul.
+
+Raw results:
+`perf/results/2026-07-26/matmul-decode_epilogues-packed-phase3-rerun/`.
 
 ## 2026-07-26: In-GEMM k-quant Decode (dequant4 MFMA fragment) — LANDED
 

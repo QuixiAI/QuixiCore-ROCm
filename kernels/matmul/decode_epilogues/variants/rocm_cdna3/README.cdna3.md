@@ -16,7 +16,11 @@ Implemented in this variant:
 - `decode_linear_residual`
 - `decode_linear_q8` for canonical GGUF `q8_0` packed weights
 - `decode_linear_epilogue_dense`
+- `decode_linear_epilogue_packed` for `q4_0`, `q8_0`, `q6_K`, `mxfp8`,
+  `nvfp4`, and `mxfp4` packed weights
 - `decode_swiglu_dense`
+- `decode_swiglu_packed` for `q4_0`, `q8_0`, `q6_K`, `mxfp8`, `nvfp4`, and
+  `mxfp4` packed weights
 - `gemm_gate_residual`
 - `grouped_gemm`
 - `lora_apply_direct_f16`
@@ -28,6 +32,11 @@ Decode shapes are latency oriented. The main kernels assign one 64-lane CDNA3
 wavefront to one output element and reduce the input dimension with
 `qc::wave_reduce_sum`. This preserves the CPU references' fp32/fp64 oracle
 semantics while giving a direct scalar-vs-wavefront optimization lever.
+
+Packed decode epilogues share the quant-format device decoders from
+`kernels/quantization/qgemv/variants/rocm_cdna3`. The harness builds
+deterministic canonical packed blocks for `q4_0`, `q8_0`, `q6_K`, `mxfp8`,
+`nvfp4`, and `mxfp4`, then compares against a byte-layout-aware host oracle.
 
 `grouped_gemm` keeps a scalar one-thread-per-output implementation. The same
 wave64 split-dot lever was measured for grouped tiles and rejected because it
@@ -42,12 +51,7 @@ wavefront dot-product implementation, not an MFMA complex GEMM.
 
 ## Non-Ports
 
-`decode_linear_epilogue_packed` and `decode_swiglu_packed` are implemented here
-only for the `q8_0` weight block used by `decode_linear_q8`. The Metal-only
-packed formats `q4_0`, `q6_K`, `mxfp8`, `nvfp4`, and `mxfp4` remain planned
-until the generic packed epilogue is wired to the full ROCm quant-format host
-oracle.
-
-The MoE-specific grouped GEMM backward and quantized grouped variants remain in
-Phase 4. This port covers only the public dense CPU `grouped_gemm` contract:
+MoE-specific grouped GEMM backward and quantized grouped variants live in the
+MoE variant, not this decode epilogue harness. This port covers only the public
+dense CPU `grouped_gemm` contract:
 `A[groups,M,K] @ B[groups,K,N] -> C[groups,M,N]`.

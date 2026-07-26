@@ -10,6 +10,14 @@ top-k routing (`moe_route_topk`), expert histogram + offset scan, token
 scatter/gather (+inverse, +zero-padded), pad-offset build, grouped GEMM, and the
 end-to-end MoE MLP.
 
+Phase 4 CPU/Metal parity additions:
+
+- `moe_route_grouped`
+- `moe_gather_backward`
+- `moe_finalize_backward`
+- `moe_grouped_gemm_backward_input`
+- `moe_grouped_gemm_backward_weight`
+
 ## Port notes (CUDA -> CDNA3)
 
 - `hipify-perl`: headers, `__nv_bfloat16` -> `__hip_bfloat16`, runtime API.
@@ -26,7 +34,11 @@ with the MFMA pass alongside qgemm.
 make test    # -> "ALL PASS (0 failures)"
 ```
 
-## Result (MI300X, 2026-07-06)
+## Result (MI300X)
 
-All 8 checks pass, incl. end-to-end MoE MLP vs fp64 (err 5.9e-07) and grouped
-GEMM (err 4.0e-07). Raw: `perf/results/2026-07-06/moe/`.
+2026-07-06: all 8 original checks pass, incl. end-to-end MoE MLP vs fp64
+(err 5.9e-07) and grouped GEMM (err 4.0e-07).
+Raw: `perf/results/2026-07-06/moe/`.
+
+2026-07-26: all 13 harness checks pass, including the five Phase 4 grouped
+routing/backward additions.

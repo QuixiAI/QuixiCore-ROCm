@@ -6,7 +6,11 @@ HIPFLAGS ?= -std=c++17 -O3 --offload-arch=$(OFFLOAD_ARCH) -Wno-unused-value
 
 all: decode_epilogues.out
 
-decode_epilogues.out: decode_epilogues.cu ../../../../common/cdna3_harness.cuh
+decode_epilogues.out: decode_epilogues.cu \
+	../../../../common/cdna3_harness.cuh \
+	../../../../quantization/qgemv/variants/rocm_cdna3/quant_formats.cuh \
+	../../../../quantization/qgemv/variants/rocm_cdna3/quant_formats_tables.cuh \
+	../../../../quantization/qgemv/variants/rocm_cdna3/quant_tables.cuh
 	$(HIPCC) $(HIPFLAGS) $< -o $@
 
 test: all

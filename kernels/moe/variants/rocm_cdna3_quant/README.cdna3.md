@@ -13,6 +13,9 @@ harness (fp64 references, no golden files).
   (A swizzled, B plain), per-expert alpha.
 - `moe_gemm_wna16<BIT>` — GPTQ/AWQ int4/int8 (uint32-packed, de-interleaved),
   per-group scale + optional zero-point.
+- `moe_gemm_gguf<q2_K>` — GGUF k-quant grouped GEMM.
+- `moe_grouped_qgemm<q2_K>` — row-indexed quantized expert GEMM.
+- `moe_grouped_qswiglu<q2_K>` — row-indexed fused quantized SwiGLU expert GEMM.
 - Plain ports: `silu_and_mul_quant_{static,perblock}`, `per_token_group_quant_fp8`,
   `nvfp4_experts_quant`, `moe_route_scored`.
 
@@ -34,8 +37,12 @@ one scale applies per fragment.
 make test    # -> "ALL PASS (0 failures)"
 ```
 
-## Result (MI300X, 2026-07-06)
+## Result (MI300X)
 
-All pass vs fp64: moe_gemm_fp8 (1.9e-4), moe_gemm_nvfp4 (2.1e-8),
-moe_gemm_wna16 int4 (2.7e-4) / int8 (2.7e-4); silu/quant/routing kernels within
-tolerance. Raw: `perf/results/2026-07-06/moe-quant-mfma/`.
+2026-07-06: all original quantized MoE checks pass vs fp64: moe_gemm_fp8
+(1.9e-4), moe_gemm_nvfp4 (2.1e-8), moe_gemm_wna16 int4 (2.7e-4) / int8
+(2.7e-4); silu/quant/routing kernels within tolerance.
+Raw: `perf/results/2026-07-06/moe-quant-mfma/`.
+
+2026-07-26: all 13 harness checks pass, including `moe_gemm_gguf q2_K`,
+`moe_grouped_qgemm q2_K`, and `moe_grouped_qswiglu q2_K`.

@@ -199,12 +199,71 @@ operations:
     path: kernels/moe
     notes: >-
       Port of QuixiCore-CUDA/kernels/moe (routing, histogram/scan, scatter/
-      gather, grouped GEMM, end-to-end MoE MLP). 8/8 checks pass on MI300X.
-      moe_quant (fp8/nvfp4 experts) depends on tensor-core mma16816 and is
-      ported with the MFMA pass.
+      gather, grouped GEMM, end-to-end MoE MLP), plus Phase 4 grouped routing
+      and backward parity rows. 13/13 checks pass on MI300X.
     variants:
       - name: rocm_cdna3
         status: imported
+        path: kernels/moe/variants/rocm_cdna3
+
+  moe_route_grouped:
+    family: moe
+    status: implemented
+    path: kernels/moe
+    notes: >-
+      Phase 4 grouped expert router with sigmoid scoring, selection bias,
+      group top-two ranking, top-k expert selection, and routed-scale
+      renormalization.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/moe/variants/rocm_cdna3
+
+  moe_gather_backward:
+    family: moe
+    status: implemented
+    path: kernels/moe
+    notes: >-
+      Phase 4 scatter-add backward pass for gathered MoE token rows, including
+      repeated rows and -1 padded-row skipping.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/moe/variants/rocm_cdna3
+
+  moe_finalize_backward:
+    family: moe
+    status: implemented
+    path: kernels/moe
+    notes: >-
+      Phase 4 adjoint of weighted MoE expert-output finalization, producing
+      gradients for expert outputs and routing weights.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/moe/variants/rocm_cdna3
+
+  moe_grouped_gemm_backward_input:
+    family: moe
+    status: implemented
+    path: kernels/moe
+    notes: >-
+      Phase 4 row-indexed grouped-GEMM backward path for input gradients.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/moe/variants/rocm_cdna3
+
+  moe_grouped_gemm_backward_weight:
+    family: moe
+    status: implemented
+    path: kernels/moe
+    notes: >-
+      Phase 4 row-indexed grouped-GEMM backward path for expert weight
+      gradients.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
         path: kernels/moe/variants/rocm_cdna3
 
   serving:
@@ -254,11 +313,35 @@ operations:
     path: kernels/moe
     notes: >-
       Quantized MoE grouped GEMMs (fp8/nvfp4/wna16 int4/int8) rewritten to gfx942
-      MFMA via tm_qmm_mfma.cuh, plus plain silu/quant/routing kernels. ALL PASS
-      vs fp64 on MI300X.
+      MFMA via tm_qmm_mfma.cuh, GGUF q2_K grouped GEMMs, plus plain
+      silu/quant/routing kernels. 13/13 checks pass vs fp64 on MI300X.
     variants:
       - name: rocm_cdna3_quant
         status: imported
+        path: kernels/moe/variants/rocm_cdna3_quant
+
+  moe_grouped_qgemm:
+    family: moe
+    status: implemented
+    path: kernels/moe
+    notes: >-
+      Phase 4 row-indexed quantized expert GEMM over canonical GGUF-style
+      packed weights; current harness coverage instantiates q2_K.
+    variants:
+      - name: rocm_cdna3_quant
+        status: implemented
+        path: kernels/moe/variants/rocm_cdna3_quant
+
+  moe_grouped_qswiglu:
+    family: moe
+    status: implemented
+    path: kernels/moe
+    notes: >-
+      Phase 4 row-indexed fused quantized expert SwiGLU over canonical
+      GGUF-style packed weights; current harness coverage instantiates q2_K.
+    variants:
+      - name: rocm_cdna3_quant
+        status: implemented
         path: kernels/moe/variants/rocm_cdna3_quant
 
   hedgehog:
@@ -370,8 +453,20 @@ operations:
     path: kernels/matmul/decode_epilogues
     notes: >-
       Dense decode-linear epilogue with optional bias, activation, and
-      residual. Q8_0 packed subpath is covered in the harness, while generic
-      packed q4/q6/MX/NV epilogues remain planned.
+      residual.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/decode_epilogues/variants/rocm_cdna3
+
+  decode_linear_epilogue_packed:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/decode_epilogues
+    notes: >-
+      Packed decode-linear epilogue for canonical Metal/CPU weight formats
+      q4_0, q8_0, q6_K, mxfp8, nvfp4, and mxfp4. Uses the shared CDNA3
+      quant-format dequantizers and a wave64 dot-product epilogue.
     variants:
       - name: rocm_cdna3
         status: implemented
@@ -382,8 +477,19 @@ operations:
     status: implemented
     path: kernels/matmul/decode_epilogues
     notes: >-
-      Dense two-projection SwiGLU decode epilogue. Q8_0 packed subpath is
-      checked by the same harness; generic packed formats remain planned.
+      Dense two-projection SwiGLU decode epilogue.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/matmul/decode_epilogues/variants/rocm_cdna3
+
+  decode_swiglu_packed:
+    family: matmul
+    status: implemented
+    path: kernels/matmul/decode_epilogues
+    notes: >-
+      Packed two-projection SwiGLU decode epilogue for q4_0, q8_0, q6_K,
+      mxfp8, nvfp4, and mxfp4 packed weights.
     variants:
       - name: rocm_cdna3
         status: implemented

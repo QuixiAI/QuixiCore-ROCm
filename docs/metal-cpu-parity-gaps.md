@@ -43,8 +43,8 @@ the kernel; a missing entry does not.
 | 0 | Harness infrastructure | — | — | — | done |
 | 1 | Attention & RoPE variants | 13 | 0 | 0 | **13** |
 | 2 | Quantized KV-cache codecs | 17 | 13 | 0 | 4 |
-| 3 | Dense matmul epilogues | 10 | 2 | 0 | 8 |
-| 4 | MoE completeness | 7 | 7 | 0 | 0 |
+| 3 | Dense matmul epilogues | 10 | 0 | 0 | **10** |
+| 4 | MoE completeness | 7 | 0 | 7 | 0 |
 | 5 | BaseQ canonical family | 9 | 9 | 0 | 0 |
 | 6 | Quant authoring & quantized embedding | 14 | 14 | 0 | 0 |
 | 7 | Sampling & embedding stragglers | 6 | 6 | 0 | 0 |
@@ -54,7 +54,7 @@ the kernel; a missing entry does not.
 | 11 | Elementwise & tensor-op surface | 42 | 42 | 0 | 0 |
 | 12 | Convolution & audio | 16 | 16 | 0 | 0 |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **153** | **0** | **25** |
+| | **Total** | **178** | **144** | **7** | **27** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -161,11 +161,10 @@ ROCm's `cmplx_matmul` currently exists only inside
 phase promotes it to a public Phase 3 matmul operation.
 
 2026-07-26 update: `kernels/matmul/decode_epilogues/variants/rocm_cdna3`
-landed the dense decode/epilogue, Q8_0 decode, SwiGLU dense, gate/residual,
-dense grouped GEMM, LoRA-F16, and complex GEMM contracts with a shared-harness
-oracle and scalar-vs-wave64 optimization runs. The Q8_0 packed subpaths are
-exercised under `decode_linear_q8`; the generic packed epilogue rows remain planned until
-`q4_0`, `q6_K`, `mxfp8`, `nvfp4`, and `mxfp4` have host oracles.
+landed the dense decode/epilogue, Q8_0 decode, packed epilogue coverage for
+`q4_0`, `q8_0`, `q6_K`, `mxfp8`, `nvfp4`, and `mxfp4`, SwiGLU dense/packed,
+gate/residual, dense grouped GEMM, LoRA-F16, and complex GEMM contracts with a
+shared-harness oracle and scalar-vs-wave64 optimization runs.
 
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
@@ -173,9 +172,9 @@ exercised under `decode_linear_q8`; the generic packed epilogue rows remain plan
 | `decode_linear_residual` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | **landed** |
 | `decode_linear_q8` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | **landed** |
 | `decode_linear_epilogue_dense` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | **landed** |
-| `decode_linear_epilogue_packed` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | planned |
+| `decode_linear_epilogue_packed` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | **landed** |
 | `decode_swiglu_dense` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | **landed** |
-| `decode_swiglu_packed` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | planned |
+| `decode_swiglu_packed` | `matmul/matmul_extended_ref.cpp` | `matmul/decode_linear` | **landed** |
 | `gemm_gate_residual` | `matmul/matmul_extended_ref.cpp` | `matmul/gemm_v3` | **landed** |
 | `grouped_gemm` (dense) | `matmul/dense_gemm_ref.cpp` | — | **landed** |
 | `lora_apply_direct_f16` | `matmul/lora_ref.cpp` | — | **landed** |
@@ -192,15 +191,22 @@ existing 32-row padded expert schedule and row-shaped expert ids. The generic
 packed `moe_grouped_qgemm`/`qswiglu` are the format-agnostic counterparts to the
 landed named fp8/nvfp4/wna16 grouped GEMMs.
 
+2026-07-26 update: recent MoE commits added all seven Phase 4 rows. The dense
+MoE harness reports `ALL PASS (0 failures)` for grouped routing and the four
+backward rows, and the quantized MoE harness reports `ALL PASS (0 failures)` for
+`moe_grouped_qgemm` and `moe_grouped_qswiglu` over `q2_K`. These are marked
+`active`; they still need a focused Phase 4 timing run before they can be marked
+`landed`.
+
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `moe_route_grouped` | `moe/moe_ref.cpp` | `moe/moe` | planned |
-| `moe_gather_backward` | `moe/moe_extended_ref.cpp` | — | planned |
-| `moe_finalize_backward` | `moe/moe_extended_ref.cpp` | — | planned |
-| `moe_grouped_gemm_backward_input` | `moe/moe_extended_ref.cpp` | — | planned |
-| `moe_grouped_gemm_backward_weight` | `moe/moe_extended_ref.cpp` | — | planned |
-| `moe_grouped_qgemm` | `moe/moe_extended_ref.cpp` | — | planned |
-| `moe_grouped_qswiglu` | `moe/moe_extended_ref.cpp` | — | planned |
+| `moe_route_grouped` | `moe/moe_ref.cpp` | `moe/moe` | active |
+| `moe_gather_backward` | `moe/moe_extended_ref.cpp` | — | active |
+| `moe_finalize_backward` | `moe/moe_extended_ref.cpp` | — | active |
+| `moe_grouped_gemm_backward_input` | `moe/moe_extended_ref.cpp` | — | active |
+| `moe_grouped_gemm_backward_weight` | `moe/moe_extended_ref.cpp` | — | active |
+| `moe_grouped_qgemm` | `moe/moe_extended_ref.cpp` | — | active |
+| `moe_grouped_qswiglu` | `moe/moe_extended_ref.cpp` | — | active |
 
 ## Phase 5 — BaseQ Canonical Family (9)
 

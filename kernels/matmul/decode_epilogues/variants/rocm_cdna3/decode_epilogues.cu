@@ -13,12 +13,14 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <type_traits>
 #include <vector>
 
 #include "../../../../common/cdna3_harness.cuh"
+#include "../../../../quantization/qgemv/variants/rocm_cdna3/quant_formats_tables.cuh"
 
 namespace {
 
@@ -151,15 +153,21 @@ __device__ __host__ inline float half_bits_to_float(const uint8_t *p) {
 #endif
 }
 
+template <typename FMT>
+__device__ __forceinline__ float packed_dequant(const uint8_t *packed,
+                                                int output, int input,
+                                                int input_dim) {
+    const int blocks = input_dim / FMT::block_k;
+    const int block = input / FMT::block_k;
+    const int column = input - block * FMT::block_k;
+    const uint8_t *base =
+        packed + (size_t(output) * blocks + block) * size_t(FMT::block_bytes);
+    return FMT::dequant(base, column);
+}
+
 __device__ __forceinline__ float q8_0_dequant(const uint8_t *packed, int output,
                                                int input, int input_dim) {
-    const int blocks = input_dim / 32;
-    const int block = input >> 5;
-    const int column = input & 31;
-    const uint8_t *base =
-        packed + (size_t(output) * blocks + block) * size_t(34);
-    return half_bits_to_float(base) *
-           float(reinterpret_cast<const int8_t *>(base + 2)[column]);
+    return packed_dequant<tmq::q8_0>(packed, output, input, input_dim);
 }
 
 template <typename S>
@@ -192,6 +200,62 @@ __global__ void q8_epilogue_wave64(
         }
         y[out_idx] = S::from_float(acc);
     }
+}
+
+template <typename S, typename FMT>
+__global__ void packed_epilogue_wave64(
+    const storage_t<S> *__restrict__ x, const uint8_t *__restrict__ weight,
+    const storage_t<S> *__restrict__ bias,
+    const storage_t<S> *__restrict__ residual, storage_t<S> *__restrict__ y,
+    int rows, int input_dim, int output_dim, int activation, int use_bias,
+    int use_residual, int residual_after_activation) {
+    const int output = blockIdx.x;
+    const int row = blockIdx.y;
+    const int lane = threadIdx.x & 63;
+    if (row >= rows || output >= output_dim) return;
+    float acc = 0.0f;
+    const size_t x_base = size_t(row) * input_dim;
+    for (int input = lane; input < input_dim; input += 64) {
+        acc += load_s<S>(x, x_base + input) *
+               packed_dequant<FMT>(weight, output, input, input_dim);
+    }
+    acc = qc::wave_reduce_sum(acc);
+    if (lane == 0) {
+        const size_t out_idx = size_t(row) * output_dim + output;
+        if (use_bias) acc += load_s<S>(bias, output);
+        if (!residual_after_activation && use_residual) {
+            acc += load_s<S>(residual, out_idx);
+        }
+        acc = activate_f(acc, activation);
+        if (residual_after_activation && use_residual) {
+            acc += load_s<S>(residual, out_idx);
+        }
+        y[out_idx] = S::from_float(acc);
+    }
+}
+
+template <typename S, typename FMT>
+__global__ void packed_epilogue_scalar(
+    const storage_t<S> *__restrict__ x, const uint8_t *__restrict__ weight,
+    const storage_t<S> *__restrict__ bias,
+    const storage_t<S> *__restrict__ residual, storage_t<S> *__restrict__ y,
+    int rows, int input_dim, int output_dim, int activation, int use_bias,
+    int use_residual, int residual_after_activation) {
+    const int output = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y;
+    if (row >= rows || output >= output_dim) return;
+    float acc = 0.0f;
+    const size_t x_base = size_t(row) * input_dim;
+    for (int input = 0; input < input_dim; ++input) {
+        acc += load_s<S>(x, x_base + input) *
+               packed_dequant<FMT>(weight, output, input, input_dim);
+    }
+    const size_t out_idx = size_t(row) * output_dim + output;
+    if (use_bias) acc += load_s<S>(bias, output);
+    if (!residual_after_activation && use_residual) acc += load_s<S>(residual, out_idx);
+    acc = activate_f(acc, activation);
+    if (residual_after_activation && use_residual) acc += load_s<S>(residual, out_idx);
+    y[out_idx] = S::from_float(acc);
 }
 
 template <typename S>
@@ -254,6 +318,61 @@ __global__ void swiglu_q8_wave64(
         }
         y[size_t(row) * output_dim + output] = S::from_float(silu_f(gate) * up);
     }
+}
+
+template <typename S, typename FMT>
+__global__ void swiglu_packed_wave64(
+    const storage_t<S> *__restrict__ x, const uint8_t *__restrict__ gate_weight,
+    const uint8_t *__restrict__ up_weight,
+    const storage_t<S> *__restrict__ gate_bias,
+    const storage_t<S> *__restrict__ up_bias, storage_t<S> *__restrict__ y,
+    int rows, int input_dim, int output_dim, int use_bias) {
+    const int output = blockIdx.x;
+    const int row = blockIdx.y;
+    const int lane = threadIdx.x & 63;
+    if (row >= rows || output >= output_dim) return;
+    float gate = 0.0f;
+    float up = 0.0f;
+    const size_t x_base = size_t(row) * input_dim;
+    for (int input = lane; input < input_dim; input += 64) {
+        const float xv = load_s<S>(x, x_base + input);
+        gate += xv * packed_dequant<FMT>(gate_weight, output, input, input_dim);
+        up += xv * packed_dequant<FMT>(up_weight, output, input, input_dim);
+    }
+    gate = qc::wave_reduce_sum(gate);
+    up = qc::wave_reduce_sum(up);
+    if (lane == 0) {
+        if (use_bias) {
+            gate += load_s<S>(gate_bias, output);
+            up += load_s<S>(up_bias, output);
+        }
+        y[size_t(row) * output_dim + output] = S::from_float(silu_f(gate) * up);
+    }
+}
+
+template <typename S, typename FMT>
+__global__ void swiglu_packed_scalar(
+    const storage_t<S> *__restrict__ x, const uint8_t *__restrict__ gate_weight,
+    const uint8_t *__restrict__ up_weight,
+    const storage_t<S> *__restrict__ gate_bias,
+    const storage_t<S> *__restrict__ up_bias, storage_t<S> *__restrict__ y,
+    int rows, int input_dim, int output_dim, int use_bias) {
+    const int output = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y;
+    if (row >= rows || output >= output_dim) return;
+    float gate = 0.0f;
+    float up = 0.0f;
+    const size_t x_base = size_t(row) * input_dim;
+    for (int input = 0; input < input_dim; ++input) {
+        const float xv = load_s<S>(x, x_base + input);
+        gate += xv * packed_dequant<FMT>(gate_weight, output, input, input_dim);
+        up += xv * packed_dequant<FMT>(up_weight, output, input, input_dim);
+    }
+    if (use_bias) {
+        gate += load_s<S>(gate_bias, output);
+        up += load_s<S>(up_bias, output);
+    }
+    y[size_t(row) * output_dim + output] = S::from_float(silu_f(gate) * up);
 }
 
 template <typename S>
@@ -446,6 +565,98 @@ float load_half_bytes_host(const uint8_t *src) {
     return __half2float(h);
 }
 
+enum class PackedFormat {
+    kQ4_0,
+    kQ8_0,
+    kQ6_K,
+    kMxFp8,
+    kNvFp4,
+    kMxFp4,
+};
+
+const char *packed_format_name(PackedFormat fmt) {
+    switch (fmt) {
+        case PackedFormat::kQ4_0:
+            return "q4_0";
+        case PackedFormat::kQ8_0:
+            return "q8_0";
+        case PackedFormat::kQ6_K:
+            return "q6_K";
+        case PackedFormat::kMxFp8:
+            return "mxfp8";
+        case PackedFormat::kNvFp4:
+            return "nvfp4";
+        case PackedFormat::kMxFp4:
+            return "mxfp4";
+    }
+    return "unknown";
+}
+
+int packed_block_k(PackedFormat fmt) {
+    switch (fmt) {
+        case PackedFormat::kQ4_0:
+            return tmq::q4_0::block_k;
+        case PackedFormat::kQ8_0:
+            return tmq::q8_0::block_k;
+        case PackedFormat::kQ6_K:
+            return tmq::q6_K::block_k;
+        case PackedFormat::kMxFp8:
+            return tmq::mxfp8::block_k;
+        case PackedFormat::kNvFp4:
+            return tmq::nvfp4::block_k;
+        case PackedFormat::kMxFp4:
+            return tmq::mxfp4::block_k;
+    }
+    return 0;
+}
+
+int packed_block_bytes(PackedFormat fmt) {
+    switch (fmt) {
+        case PackedFormat::kQ4_0:
+            return tmq::q4_0::block_bytes;
+        case PackedFormat::kQ8_0:
+            return tmq::q8_0::block_bytes;
+        case PackedFormat::kQ6_K:
+            return tmq::q6_K::block_bytes;
+        case PackedFormat::kMxFp8:
+            return tmq::mxfp8::block_bytes;
+        case PackedFormat::kNvFp4:
+            return tmq::nvfp4::block_bytes;
+        case PackedFormat::kMxFp4:
+            return tmq::mxfp4::block_bytes;
+    }
+    return 0;
+}
+
+void require_packed_shape(PackedFormat fmt, int input_dim) {
+    const int block_k = packed_block_k(fmt);
+    if (block_k <= 0 || input_dim % block_k != 0) {
+        std::fprintf(stderr, "%s input_dim=%d is not a multiple of block_k=%d\n",
+                     packed_format_name(fmt), input_dim, block_k);
+        std::abort();
+    }
+}
+
+double e2m1_decode_host(unsigned nib) {
+    static constexpr double values[8] = {0.0, 0.5, 1.0, 1.5,
+                                         2.0, 3.0, 4.0, 6.0};
+    const double mag = values[nib & 7u];
+    return (nib & 8u) ? -mag : mag;
+}
+
+double e8m0_decode_host(uint8_t e) {
+    if (e == 0) return 0.0;
+    return std::ldexp(1.0, int(e) - 127);
+}
+
+void fill_nibbles(uint8_t *qs, int bytes, qc::Rng &rng) {
+    for (int i = 0; i < bytes; ++i) {
+        const int lo = rng.integer(0, 15);
+        const int hi = rng.integer(0, 15);
+        qs[i] = uint8_t(lo | (hi << 4));
+    }
+}
+
 std::vector<uint8_t> pack_q8_0(const std::vector<float> &weights, int rows,
                                int input_dim) {
     const int blocks = input_dim / 32;
@@ -481,6 +692,140 @@ double q8_0_dequant_host(const std::vector<uint8_t> &packed, int output,
            double(reinterpret_cast<const int8_t *>(base + 2)[column]);
 }
 
+std::vector<uint8_t> pack_format_blocks(PackedFormat fmt, int rows,
+                                        int input_dim, qc::Rng &rng) {
+    require_packed_shape(fmt, input_dim);
+    const int block_k = packed_block_k(fmt);
+    const int block_bytes = packed_block_bytes(fmt);
+    const int blocks = input_dim / block_k;
+    std::vector<uint8_t> packed(size_t(rows) * blocks * block_bytes);
+    static constexpr uint8_t kE4m3Codes[] = {
+        0x00, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40, 0x48, 0x50,
+        0x80, 0x98, 0xa0, 0xa8, 0xb0, 0xb8, 0xc0, 0xc8, 0xd0,
+    };
+    static constexpr uint8_t kNvScales[] = {0x20, 0x28, 0x30, 0x38};
+    for (int row = 0; row < rows; ++row) {
+        for (int block = 0; block < blocks; ++block) {
+            uint8_t *base =
+                packed.data() + (size_t(row) * blocks + block) * block_bytes;
+            switch (fmt) {
+                case PackedFormat::kQ4_0:
+                    store_half_bytes(base, rng.uniform(0.004f, 0.025f));
+                    fill_nibbles(base + 2, 16, rng);
+                    break;
+                case PackedFormat::kQ8_0: {
+                    store_half_bytes(base, rng.uniform(0.001f, 0.009f));
+                    int8_t *codes = reinterpret_cast<int8_t *>(base + 2);
+                    for (int i = 0; i < 32; ++i) {
+                        codes[i] = static_cast<int8_t>(rng.integer(-80, 80));
+                    }
+                    break;
+                }
+                case PackedFormat::kQ6_K: {
+                    std::fill(base, base + tmq::q6_K::block_bytes, uint8_t(0));
+                    int8_t *scales = reinterpret_cast<int8_t *>(base + 192);
+                    for (int i = 0; i < 16; ++i) {
+                        int s = rng.integer(-6, 6);
+                        if (s == 0) s = 1;
+                        scales[i] = static_cast<int8_t>(s);
+                    }
+                    store_half_bytes(base + 208, rng.uniform(0.0008f, 0.0035f));
+                    for (int col = 0; col < 256; ++col) {
+                        const int code = rng.integer(0, 63);
+                        const int chunk = col >> 7;
+                        const int pos = col & 127;
+                        const int group = pos >> 5;
+                        const int lane = pos & 31;
+                        const int ql_off = chunk * 64 + lane + 32 * (group & 1);
+                        if (group & 2) {
+                            base[ql_off] = uint8_t(base[ql_off] | ((code & 0xF) << 4));
+                        } else {
+                            base[ql_off] = uint8_t(base[ql_off] | (code & 0xF));
+                        }
+                        base[128 + chunk * 32 + lane] = uint8_t(
+                            base[128 + chunk * 32 + lane] |
+                            (((code >> 4) & 3) << (2 * group)));
+                    }
+                    break;
+                }
+                case PackedFormat::kMxFp8:
+                    base[0] = static_cast<uint8_t>(rng.integer(120, 124));
+                    for (int i = 0; i < 32; ++i) {
+                        base[1 + i] =
+                            kE4m3Codes[rng.integer(
+                                0, int(sizeof(kE4m3Codes) / sizeof(kE4m3Codes[0])) - 1)];
+                    }
+                    break;
+                case PackedFormat::kNvFp4:
+                    base[0] =
+                        kNvScales[rng.integer(
+                            0, int(sizeof(kNvScales) / sizeof(kNvScales[0])) - 1)];
+                    fill_nibbles(base + 1, 8, rng);
+                    break;
+                case PackedFormat::kMxFp4:
+                    base[0] = static_cast<uint8_t>(rng.integer(120, 124));
+                    fill_nibbles(base + 1, 16, rng);
+                    break;
+            }
+        }
+    }
+    return packed;
+}
+
+double packed_dequant_host(PackedFormat fmt, const std::vector<uint8_t> &packed,
+                           int output, int input, int input_dim) {
+    require_packed_shape(fmt, input_dim);
+    const int block_k = packed_block_k(fmt);
+    const int block_bytes = packed_block_bytes(fmt);
+    const int blocks = input_dim / block_k;
+    const int block = input / block_k;
+    const int col = input - block * block_k;
+    const uint8_t *base =
+        packed.data() + (size_t(output) * blocks + block) * block_bytes;
+    switch (fmt) {
+        case PackedFormat::kQ4_0: {
+            const uint8_t *qs = base + 2;
+            const int nib = (col < 16) ? (qs[col] & 0x0F) : (qs[col - 16] >> 4);
+            return double(load_half_bytes_host(base)) * double(nib - 8);
+        }
+        case PackedFormat::kQ8_0:
+            return double(load_half_bytes_host(base)) *
+                   double(reinterpret_cast<const int8_t *>(base + 2)[col]);
+        case PackedFormat::kQ6_K: {
+            const uint8_t *ql = base;
+            const uint8_t *qh = base + 128;
+            const int8_t *sca = reinterpret_cast<const int8_t *>(base + 192);
+            const double d = double(load_half_bytes_host(base + 208));
+            const int chunk = col >> 7;
+            const int pos = col & 127;
+            const int group = pos >> 5;
+            const int lane = pos & 31;
+            const int ql_byte = ql[chunk * 64 + lane + 32 * (group & 1)];
+            const int nib = (group & 2) ? (ql_byte >> 4) : (ql_byte & 0xF);
+            const int hbits = (qh[chunk * 32 + lane] >> (2 * group)) & 3;
+            const int q = (nib | (hbits << 4)) - 32;
+            const int sc_idx = chunk * 8 + (lane >> 4) + group * 2;
+            return d * double(int(sca[sc_idx])) * double(q);
+        }
+        case PackedFormat::kMxFp8:
+            return e8m0_decode_host(base[0]) *
+                   double(tmq::e4m3_decode_host(base[1 + col]));
+        case PackedFormat::kNvFp4: {
+            const uint8_t *qs = base + 1;
+            const unsigned nib =
+                (col < 8) ? (qs[col] & 0x0F) : (qs[col - 8] >> 4);
+            return double(tmq::e4m3_decode_host(base[0])) * e2m1_decode_host(nib);
+        }
+        case PackedFormat::kMxFp4: {
+            const uint8_t *qs = base + 1;
+            const unsigned nib =
+                (col < 16) ? (qs[col] & 0x0F) : (qs[col - 16] >> 4);
+            return e8m0_decode_host(base[0]) * e2m1_decode_host(nib);
+        }
+    }
+    return 0.0;
+}
+
 template <typename S>
 std::vector<double> ref_q8_epilogue(
     const std::vector<storage_t<S>> &x, const std::vector<uint8_t> &packed,
@@ -495,6 +840,32 @@ std::vector<double> ref_q8_epilogue(
             for (int i = 0; i < input_dim; ++i) {
                 acc += hval(x, size_t(r) * input_dim + i) *
                        q8_0_dequant_host(packed, o, i, input_dim);
+            }
+            const size_t out_idx = size_t(r) * output_dim + o;
+            if (use_bias) acc += hval(bias, o);
+            if (!residual_after_activation && use_residual) acc += hval(residual, out_idx);
+            acc = host_activate(acc, activation);
+            if (residual_after_activation && use_residual) acc += hval(residual, out_idx);
+            ref[out_idx] = acc;
+        }
+    }
+    return ref;
+}
+
+template <typename S>
+std::vector<double> ref_packed_epilogue(
+    PackedFormat fmt, const std::vector<storage_t<S>> &x,
+    const std::vector<uint8_t> &packed, const std::vector<storage_t<S>> &bias,
+    const std::vector<storage_t<S>> &residual, int rows, int input_dim,
+    int output_dim, int activation, bool use_bias, bool use_residual,
+    bool residual_after_activation) {
+    std::vector<double> ref(size_t(rows) * output_dim);
+    for (int r = 0; r < rows; ++r) {
+        for (int o = 0; o < output_dim; ++o) {
+            double acc = 0.0;
+            for (int i = 0; i < input_dim; ++i) {
+                acc += hval(x, size_t(r) * input_dim + i) *
+                       packed_dequant_host(fmt, packed, o, i, input_dim);
             }
             const size_t out_idx = size_t(r) * output_dim + o;
             if (use_bias) acc += hval(bias, o);
@@ -562,6 +933,34 @@ bool run_q8_case(const char *label, int rows, int input_dim, int output_dim,
     return ok;
 }
 
+template <typename S, typename FMT>
+bool run_packed_epilogue_case(const char *label, PackedFormat fmt, int rows,
+                              int input_dim, int output_dim, int activation,
+                              bool use_bias, bool use_residual,
+                              bool residual_after_activation, qc::Rng &rng) {
+    const auto x = as_storage<S>(rng.normals(size_t(rows) * input_dim, 0.08f));
+    const auto packed = pack_format_blocks(fmt, output_dim, input_dim, rng);
+    const auto bias = as_storage<S>(rng.normals(output_dim, 0.04f));
+    const auto residual = as_storage<S>(rng.normals(size_t(rows) * output_dim, 0.03f));
+    auto *dx = qc::dnew(x);
+    auto *dw = qc::dnew(packed);
+    auto *db = qc::dnew(bias);
+    auto *dr = qc::dnew(residual);
+    auto *dy = qc::dzero<storage_t<S>>(size_t(rows) * output_dim);
+    packed_epilogue_wave64<S, FMT><<<dim3(output_dim, rows), 64>>>(
+        dx, dw, db, dr, dy, rows, input_dim, output_dim, activation, use_bias,
+        use_residual, residual_after_activation);
+    QC_SYNC();
+    auto got = qc::d2h(dy, size_t(rows) * output_dim);
+    auto ref = ref_packed_epilogue<S>(fmt, x, packed, bias, residual, rows,
+                                      input_dim, output_dim, activation,
+                                      use_bias, use_residual,
+                                      residual_after_activation);
+    const bool ok = qc::compare(got, ref, qc::tol_for<S>()).report(label);
+    qc::dfree(dx, dw, db, dr, dy);
+    return ok;
+}
+
 template <typename S>
 std::vector<double> ref_swiglu_dense(
     const std::vector<storage_t<S>> &x, const std::vector<storage_t<S>> &gw,
@@ -605,6 +1004,33 @@ std::vector<double> ref_swiglu_q8(
                 const double xv = hval(x, size_t(r) * input_dim + i);
                 gate += xv * q8_0_dequant_host(gw, o, i, input_dim);
                 up += xv * q8_0_dequant_host(uw, o, i, input_dim);
+            }
+            if (use_bias) {
+                gate += hval(gb, o);
+                up += hval(ub, o);
+            }
+            ref[size_t(r) * output_dim + o] =
+                (gate / (1.0 + std::exp(-gate))) * up;
+        }
+    }
+    return ref;
+}
+
+template <typename S>
+std::vector<double> ref_swiglu_packed(
+    PackedFormat fmt, const std::vector<storage_t<S>> &x,
+    const std::vector<uint8_t> &gw, const std::vector<uint8_t> &uw,
+    const std::vector<storage_t<S>> &gb, const std::vector<storage_t<S>> &ub,
+    int rows, int input_dim, int output_dim, bool use_bias) {
+    std::vector<double> ref(size_t(rows) * output_dim);
+    for (int r = 0; r < rows; ++r) {
+        for (int o = 0; o < output_dim; ++o) {
+            double gate = 0.0;
+            double up = 0.0;
+            for (int i = 0; i < input_dim; ++i) {
+                const double xv = hval(x, size_t(r) * input_dim + i);
+                gate += xv * packed_dequant_host(fmt, gw, o, i, input_dim);
+                up += xv * packed_dequant_host(fmt, uw, o, i, input_dim);
             }
             if (use_bias) {
                 gate += hval(gb, o);
@@ -664,6 +1090,33 @@ bool run_swiglu_q8_case(const char *label, int rows, int input_dim,
     auto got = qc::d2h(dy, size_t(rows) * output_dim);
     auto ref = ref_swiglu_q8<S>(x, gw, uw, gb, ub, rows, input_dim,
                                 output_dim, use_bias);
+    const bool ok = qc::compare(got, ref, qc::tol_for<S>()).report(label);
+    qc::dfree(dx, dgw, duw, dgb, dub, dy);
+    return ok;
+}
+
+template <typename S, typename FMT>
+bool run_swiglu_packed_case(const char *label, PackedFormat fmt, int rows,
+                            int input_dim, int output_dim, bool use_bias,
+                            qc::Rng &rng) {
+    const auto x = as_storage<S>(rng.normals(size_t(rows) * input_dim, 0.08f));
+    const auto gw = pack_format_blocks(fmt, output_dim, input_dim, rng);
+    const auto uw = pack_format_blocks(fmt, output_dim, input_dim, rng);
+    const auto gb = as_storage<S>(rng.normals(output_dim, 0.04f));
+    const auto ub = as_storage<S>(rng.normals(output_dim, 0.04f));
+    auto *dx = qc::dnew(x);
+    auto *dgw = qc::dnew(gw);
+    auto *duw = qc::dnew(uw);
+    auto *dgb = qc::dnew(gb);
+    auto *dub = qc::dnew(ub);
+    auto *dy = qc::dzero<storage_t<S>>(size_t(rows) * output_dim);
+    swiglu_packed_wave64<S, FMT><<<dim3(output_dim, rows), 64>>>(
+        dx, dgw, duw, dgb, dub, dy, rows, input_dim, output_dim, use_bias);
+    QC_SYNC();
+    auto got = qc::d2h(dy, size_t(rows) * output_dim);
+    auto ref =
+        ref_swiglu_packed<S>(fmt, x, gw, uw, gb, ub, rows, input_dim,
+                             output_dim, use_bias);
     const bool ok = qc::compare(got, ref, qc::tol_for<S>()).report(label);
     qc::dfree(dx, dgw, duw, dgb, dub, dy);
     return ok;
@@ -842,13 +1295,44 @@ bool run_correctness() {
     ok &= run_linear_case<qc::StorageFp16>(
         "decode_linear_epilogue_dense fp16", 3, 128, 80, kSilu, true, true,
         true, rng);
-    ok &= run_q8_case<qc::StorageF32>(
-        "decode_linear_epilogue_packed q8_0 fp32", 3, 160, 65, kGeluErf,
-        true, true, true, rng);
+    ok &= run_packed_epilogue_case<qc::StorageF32, tmq::q4_0>(
+        "decode_linear_epilogue_packed q4_0 fp32", PackedFormat::kQ4_0,
+        2, 512, 35, kGeluErf, true, true, true, rng);
+    ok &= run_packed_epilogue_case<qc::StorageF32, tmq::q8_0>(
+        "decode_linear_epilogue_packed q8_0 fp32", PackedFormat::kQ8_0,
+        2, 512, 35, kGeluErf, true, true, true, rng);
+    ok &= run_packed_epilogue_case<qc::StorageF32, tmq::q6_K>(
+        "decode_linear_epilogue_packed q6_K fp32", PackedFormat::kQ6_K,
+        2, 512, 35, kGeluErf, true, true, true, rng);
+    ok &= run_packed_epilogue_case<qc::StorageF32, tmq::mxfp8>(
+        "decode_linear_epilogue_packed mxfp8 fp32", PackedFormat::kMxFp8,
+        2, 512, 35, kGeluErf, true, true, true, rng);
+    ok &= run_packed_epilogue_case<qc::StorageF32, tmq::nvfp4>(
+        "decode_linear_epilogue_packed nvfp4 fp32", PackedFormat::kNvFp4,
+        2, 512, 35, kGeluErf, true, true, true, rng);
+    ok &= run_packed_epilogue_case<qc::StorageF32, tmq::mxfp4>(
+        "decode_linear_epilogue_packed mxfp4 fp32", PackedFormat::kMxFp4,
+        2, 512, 35, kGeluErf, true, true, true, rng);
     ok &= run_swiglu_dense_case<qc::StorageBf16>(
         "decode_swiglu_dense bf16", 4, 96, 64, true, rng);
-    ok &= run_swiglu_q8_case<qc::StorageF32>(
-        "decode_swiglu_packed q8_0 fp32", 3, 128, 72, true, rng);
+    ok &= run_swiglu_packed_case<qc::StorageF32, tmq::q4_0>(
+        "decode_swiglu_packed q4_0 fp32", PackedFormat::kQ4_0,
+        2, 512, 35, true, rng);
+    ok &= run_swiglu_packed_case<qc::StorageF32, tmq::q8_0>(
+        "decode_swiglu_packed q8_0 fp32", PackedFormat::kQ8_0,
+        2, 512, 35, true, rng);
+    ok &= run_swiglu_packed_case<qc::StorageF32, tmq::q6_K>(
+        "decode_swiglu_packed q6_K fp32", PackedFormat::kQ6_K,
+        2, 512, 35, true, rng);
+    ok &= run_swiglu_packed_case<qc::StorageF32, tmq::mxfp8>(
+        "decode_swiglu_packed mxfp8 fp32", PackedFormat::kMxFp8,
+        2, 512, 35, true, rng);
+    ok &= run_swiglu_packed_case<qc::StorageF32, tmq::nvfp4>(
+        "decode_swiglu_packed nvfp4 fp32", PackedFormat::kNvFp4,
+        2, 512, 35, true, rng);
+    ok &= run_swiglu_packed_case<qc::StorageF32, tmq::mxfp4>(
+        "decode_swiglu_packed mxfp4 fp32", PackedFormat::kMxFp4,
+        2, 512, 35, true, rng);
     ok &= run_gemm_gate_case<qc::StorageF32>("gemm_gate_residual fp32",
                                              4, 91, 79, rng);
     ok &= run_grouped_gemm_case(rng);
@@ -897,6 +1381,84 @@ void run_bench() {
     std::printf("  speedup %.2fx  keep=%s\n", base.median_ms / cand.median_ms,
                 cand.median_ms <= base.median_ms ? "wave64" : "scalar");
 
+    constexpr int packed_rows = 64;
+    constexpr int packed_input_dim = 4096;
+    constexpr int packed_output_dim = 1024;
+    auto px = as_storage<qc::StorageF32>(
+        rng.normals(size_t(packed_rows) * packed_input_dim, 0.08f));
+    auto pw = pack_format_blocks(PackedFormat::kMxFp4, packed_output_dim,
+                                 packed_input_dim, rng);
+    auto pbias = as_storage<qc::StorageF32>(rng.normals(packed_output_dim, 0.04f));
+    auto packed_residual = as_storage<qc::StorageF32>(
+        rng.normals(size_t(packed_rows) * packed_output_dim, 0.03f));
+    auto *dpx = qc::dnew(px);
+    auto *dpw = qc::dnew(pw);
+    auto *dpbias = qc::dnew(pbias);
+    auto *dpresidual = qc::dnew(packed_residual);
+    auto *dpy0 = qc::dzero<float>(size_t(packed_rows) * packed_output_dim);
+    auto *dpy1 = qc::dzero<float>(size_t(packed_rows) * packed_output_dim);
+    auto packed_scalar = [&] {
+        packed_epilogue_scalar<qc::StorageF32, tmq::mxfp4>
+            <<<dim3((packed_output_dim + 255) / 256, packed_rows), 256>>>(
+                dpx, dpw, dpbias, dpresidual, dpy0, packed_rows, packed_input_dim,
+                packed_output_dim, kGeluErf, 1, 1, 1);
+    };
+    auto packed_wave64 = [&] {
+        packed_epilogue_wave64<qc::StorageF32, tmq::mxfp4>
+            <<<dim3(packed_output_dim, packed_rows), 64>>>(
+                dpx, dpw, dpbias, dpresidual, dpy1, packed_rows, packed_input_dim,
+                packed_output_dim, kGeluErf, 1, 1, 1);
+    };
+    packed_scalar();
+    packed_wave64();
+    QC_SYNC();
+    const auto pbase = qc::bench(packed_scalar, 10, 50);
+    const auto pcand = qc::bench(packed_wave64, 10, 50);
+    const double pflops = 2.0 * packed_rows * packed_input_dim * packed_output_dim;
+    std::printf("== decode_linear_epilogue_packed mxfp4 fp32 A/B rows=%d in=%d out=%d\n",
+                packed_rows, packed_input_dim, packed_output_dim);
+    pbase.report_compute("scalar one-thread/output", pflops);
+    pcand.report_compute("wave64 one-wave/output", pflops);
+    std::printf("  speedup %.2fx  keep=%s\n", pbase.median_ms / pcand.median_ms,
+                pcand.median_ms <= pbase.median_ms ? "wave64" : "scalar");
+
+    auto pgw = pack_format_blocks(PackedFormat::kMxFp4, packed_output_dim,
+                                  packed_input_dim, rng);
+    auto puw = pack_format_blocks(PackedFormat::kMxFp4, packed_output_dim,
+                                  packed_input_dim, rng);
+    auto pgbias = as_storage<qc::StorageF32>(rng.normals(packed_output_dim, 0.04f));
+    auto pubias = as_storage<qc::StorageF32>(rng.normals(packed_output_dim, 0.04f));
+    auto *dpgw = qc::dnew(pgw);
+    auto *dpuw = qc::dnew(puw);
+    auto *dpgbias = qc::dnew(pgbias);
+    auto *dpubias = qc::dnew(pubias);
+    auto *dpsy0 = qc::dzero<float>(size_t(packed_rows) * packed_output_dim);
+    auto *dpsy1 = qc::dzero<float>(size_t(packed_rows) * packed_output_dim);
+    auto packed_swiglu_scalar = [&] {
+        swiglu_packed_scalar<qc::StorageF32, tmq::mxfp4>
+            <<<dim3((packed_output_dim + 255) / 256, packed_rows), 256>>>(
+                dpx, dpgw, dpuw, dpgbias, dpubias, dpsy0, packed_rows,
+                packed_input_dim, packed_output_dim, 1);
+    };
+    auto packed_swiglu_wave64 = [&] {
+        swiglu_packed_wave64<qc::StorageF32, tmq::mxfp4>
+            <<<dim3(packed_output_dim, packed_rows), 64>>>(
+                dpx, dpgw, dpuw, dpgbias, dpubias, dpsy1, packed_rows,
+                packed_input_dim, packed_output_dim, 1);
+    };
+    packed_swiglu_scalar();
+    packed_swiglu_wave64();
+    QC_SYNC();
+    const auto psbase = qc::bench(packed_swiglu_scalar, 10, 50);
+    const auto pscand = qc::bench(packed_swiglu_wave64, 10, 50);
+    const double psflops = 4.0 * packed_rows * packed_input_dim * packed_output_dim;
+    std::printf("== decode_swiglu_packed mxfp4 fp32 A/B rows=%d in=%d out=%d\n",
+                packed_rows, packed_input_dim, packed_output_dim);
+    psbase.report_compute("scalar one-thread/output", psflops);
+    pscand.report_compute("wave64 one-wave/output", psflops);
+    std::printf("  speedup %.2fx  keep=%s\n", psbase.median_ms / pscand.median_ms,
+                pscand.median_ms <= psbase.median_ms ? "wave64" : "scalar");
+
     constexpr int groups = 8;
     constexpr int gm = 64;
     constexpr int gn = 512;
@@ -928,7 +1490,9 @@ void run_bench() {
     std::printf("  speedup %.2fx  keep=%s\n", gbase.median_ms / gcand.median_ms,
                 gcand.median_ms <= gbase.median_ms ? "wave64" : "scalar");
 
-    qc::dfree(dx, dw, db, dr, dy0, dy1, dga, dgb, dgc0, dgc1);
+    qc::dfree(dx, dw, db, dr, dy0, dy1, dpx, dpw, dpbias, dpresidual, dpy0,
+              dpy1, dpgw, dpuw, dpgbias, dpubias, dpsy0, dpsy1, dga, dgb,
+              dgc0, dgc1);
 }
 
 }  // namespace
