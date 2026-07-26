@@ -102,6 +102,107 @@ __global__ void moe_gemm_gguf(float* __restrict__ Y, const half* __restrict__ A,
     store_scaled(Y, N, total_rows, m0 + 16, n0, accB, 1.0f);
 }
 
+
+// ---- Phase 4 completeness: the format-agnostic row-indexed quantized expert
+// GEMMs. Unlike moe_gemm_gguf above (32-row expert tiles + MFMA), these take
+// ROW-SHAPED expert ids matching the CPU sibling contract: any row may name any
+// expert, and -1 marks a padded row that must emit zeros. That rules out the
+// MFMA tile schedule, which needs one expert per 32-row tile -- so this is a
+// correctness-first dot-product kernel, one block per row. When rows ARE sorted
+// by expert (the moe_permute -> moe_pad_schedule output), moe_gemm_gguf is the
+// fast path for the same math. ----
+
+template<typename FMT>
+__global__ void moe_grouped_qgemm(float* __restrict__ Y, const half* __restrict__ A,
+                                  const uint8_t* __restrict__ B,
+                                  const int* __restrict__ expert_ids,
+                                  const float* __restrict__ bias,
+                                  int rows, int N, int K, int use_bias) {
+    const int r = blockIdx.x;
+    if (r >= rows) return;
+    const int e = expert_ids[r];
+    if (e < 0) {                                  // padded row -> zeros
+        for (int n = threadIdx.x; n < N; n += blockDim.x) Y[(size_t)r * N + n] = 0.0f;
+        return;
+    }
+    const int bpr = K / FMT::block_k;
+    const uint8_t* Be = B + (size_t)e * N * bpr * FMT::block_bytes;
+    const half* Ar = A + (size_t)r * K;
+    for (int n = threadIdx.x; n < N; n += blockDim.x) {
+        const uint8_t* wrow = Be + (size_t)n * bpr * FMT::block_bytes;
+        float acc = 0.0f;
+        for (int kb = 0; kb < bpr; ++kb) {
+            const uint8_t* blk = wrow + (size_t)kb * FMT::block_bytes;
+            const int base = kb * FMT::block_k;
+            for (int c = 0; c < FMT::block_k; c += 8) {
+                float w[8];
+                dequant8<FMT>(blk, c, w);
+                #pragma unroll
+                for (int i = 0; i < 8; ++i)
+                    acc += __half2float(Ar[base + c + i]) * w[i];
+            }
+        }
+        if (use_bias) acc += bias[(size_t)e * N + n];
+        Y[(size_t)r * N + n] = acc;
+    }
+}
+
+// Same, fused with SwiGLU. B holds 2*inter rows per expert: [0,inter) gate,
+// [inter,2*inter) up. Y is (rows, inter). oai_mode applies the OpenAI variant
+// (clamp gate to `limit`, clamp up to +-limit, swish(alpha*gate) * (1+up)).
+template<typename FMT>
+__global__ void moe_grouped_qswiglu(float* __restrict__ Y, const half* __restrict__ A,
+                                    const uint8_t* __restrict__ B,
+                                    const int* __restrict__ expert_ids,
+                                    const float* __restrict__ bias,
+                                    int rows, int inter, int K, int use_bias,
+                                    int oai_mode, float alpha, float limit) {
+    const int r = blockIdx.x;
+    if (r >= rows) return;
+    const int e = expert_ids[r];
+    if (e < 0) {
+        for (int n = threadIdx.x; n < inter; n += blockDim.x) Y[(size_t)r * inter + n] = 0.0f;
+        return;
+    }
+    const int bpr = K / FMT::block_k, outs = 2 * inter;
+    const uint8_t* Be = B + (size_t)e * outs * bpr * FMT::block_bytes;
+    const half* Ar = A + (size_t)r * K;
+    for (int n = threadIdx.x; n < inter; n += blockDim.x) {
+        const uint8_t* grow = Be + (size_t)n * bpr * FMT::block_bytes;
+        const uint8_t* urow = Be + (size_t)(inter + n) * bpr * FMT::block_bytes;
+        float gate = 0.0f, up = 0.0f;
+        for (int kb = 0; kb < bpr; ++kb) {
+            const uint8_t* gb = grow + (size_t)kb * FMT::block_bytes;
+            const uint8_t* ub = urow + (size_t)kb * FMT::block_bytes;
+            const int base = kb * FMT::block_k;
+            for (int c = 0; c < FMT::block_k; c += 8) {
+                float wg[8], wu[8];
+                dequant8<FMT>(gb, c, wg);
+                dequant8<FMT>(ub, c, wu);
+                #pragma unroll
+                for (int i = 0; i < 8; ++i) {
+                    const float a = __half2float(Ar[base + c + i]);
+                    gate += a * wg[i];
+                    up   += a * wu[i];
+                }
+            }
+        }
+        if (use_bias) {
+            const size_t bb = (size_t)e * outs;
+            gate += bias[bb + n];
+            up   += bias[bb + inter + n];
+        }
+        float out;
+        if (oai_mode) {
+            gate = fminf(gate, limit);
+            up = fminf(fmaxf(up, -limit), limit);
+            out = gate / (1.0f + expf(-alpha * gate)) * (1.0f + up);
+        } else {
+            out = gate / (1.0f + expf(-gate)) * up;
+        }
+        Y[(size_t)r * inter + n] = out;
+    }
+}
 // ---- nvfp4 dual-operand grouped GEMM. A & B both fp4 e2m1 packed 2/byte
 // (row, K/2); per-16-block e4m3 scales: A-scale swizzled per (row_in_expert,
 // group) with per-expert sf_offsets base, B-scale plain per (e,n,group);

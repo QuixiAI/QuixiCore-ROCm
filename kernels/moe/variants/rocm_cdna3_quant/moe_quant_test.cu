@@ -403,6 +403,84 @@ int main() {
         report("moe_gemm_gguf q2_K (fp64)", gsum / std::max(rsum, 1e-30), 5e-3);
     }
 
+    // ---- Phase 4: row-indexed quantized expert GEMM + fused SwiGLU (q2_K) ----
+    {
+        const int R = 12, E = 3, N = 64, KK = 512;
+        const int bpr = KK / 256, BB = 84;
+        std::vector<int> eid(R);
+        for (int r = 0; r < R; ++r) eid[r] = (r == R - 1) ? -1 : r % E;   // last row padded
+        auto A = randv((size_t)R * KK, -1, 1);
+        std::vector<__half> Ah(A.size());
+        for (size_t i = 0; i < Ah.size(); ++i) Ah[i] = __float2half(A[i]);
+
+        // qgemm weights [E,N,K] packed; qswiglu weights [E,2*inter,K] packed
+        const int INTER = 32, OUTS = 2 * INTER;
+        std::vector<uint8_t> Bg((size_t)E * N * bpr * BB), Bs((size_t)E * OUTS * bpr * BB);
+        std::vector<float> bg((size_t)E * N), bs((size_t)E * OUTS);
+        std::uniform_int_distribution<int> byte(0, 255);
+        auto fill = [&](std::vector<uint8_t>& v) {
+            for (size_t blk = 0; blk < v.size() / BB; ++blk) {
+                uint8_t* b = v.data() + blk * BB;
+                for (int i = 0; i < 80; ++i) b[i] = (uint8_t)byte(rng);
+                *reinterpret_cast<_Float16*>(b + 80) = (_Float16)(0.01f + 0.02f * byte(rng) / 255.f);
+                *reinterpret_cast<_Float16*>(b + 82) = (_Float16)(0.005f * byte(rng) / 255.f);
+            }
+        };
+        fill(Bg); fill(Bs);
+        for (auto& x : bg) x = randv(1, -0.3f, 0.3f)[0];
+        for (auto& x : bs) x = randv(1, -0.3f, 0.3f)[0];
+        auto q2k = [](const uint8_t* base, int col) -> double {
+            const double d = (float)*reinterpret_cast<const _Float16*>(base + 80);
+            const double dmin = (float)*reinterpret_cast<const _Float16*>(base + 82);
+            const int chunk = col >> 7, pos = col & 127, sidx = pos >> 5;
+            const int sub = (pos >> 4) & 1, l = pos & 15;
+            const int is = chunk * 8 + sidx * 2 + sub;
+            const int q = (base[16 + chunk * 32 + sub * 16 + l] >> (2 * sidx)) & 3;
+            return d * double(base[is] & 0xF) * double(q) - dmin * double(base[is] >> 4);
+        };
+        auto dot = [&](const std::vector<uint8_t>& W, int e, int outs, int row, int r) {
+            const uint8_t* w = W.data() + ((size_t)e * outs + row) * bpr * BB;
+            double acc = 0;
+            for (int k = 0; k < KK; ++k)
+                acc += (double)__half2float(Ah[(size_t)r * KK + k]) * q2k(w + (k / 256) * BB, k % 256);
+            return acc;
+        };
+
+        auto dA = dnew(Ah); auto dEid = dnew(eid);
+        auto dBg = dnew(Bg); auto dBs = dnew(Bs);
+        auto dbg = dnew(bg); auto dbs = dnew(bs);
+        float* dYg = dzero<float>((size_t)R * N);
+        float* dYs = dzero<float>((size_t)R * INTER);
+        moe_grouped_qgemm<q2_K><<<R, 128>>>(dYg, reinterpret_cast<const half*>(dA), dBg,
+                                            dEid, dbg, R, N, KK, 1);
+        moe_grouped_qswiglu<q2_K><<<R, 128>>>(dYs, reinterpret_cast<const half*>(dA), dBs,
+                                              dEid, dbs, R, INTER, KK, 1, 0, 1.702f, 7.0f);
+        CK(hipDeviceSynchronize());
+        if (hipGetLastError() != hipSuccess) { printf("KERNEL ERR (phase4 q)\n"); return 1; }
+        auto Yg = d2h(dYg, (size_t)R * N); auto Ys = d2h(dYs, (size_t)R * INTER);
+
+        double eg = 0, es = 0;
+        for (int r = 0; r < R; ++r) {
+            const int e = eid[r];
+            for (int n = 0; n < N; ++n) {
+                double ref = (e < 0) ? 0.0 : dot(Bg, e, N, n, r) + bg[(size_t)e * N + n];
+                eg = std::max(eg, std::abs((double)Yg[(size_t)r * N + n] - ref) / std::max(1.0, std::abs(ref)));
+            }
+            for (int n = 0; n < INTER; ++n) {
+                double ref;
+                if (e < 0) ref = 0.0;
+                else {
+                    double g = dot(Bs, e, OUTS, n, r) + bs[(size_t)e * OUTS + n];
+                    double u = dot(Bs, e, OUTS, INTER + n, r) + bs[(size_t)e * OUTS + INTER + n];
+                    ref = g / (1.0 + std::exp(-g)) * u;
+                }
+                es = std::max(es, std::abs((double)Ys[(size_t)r * INTER + n] - ref) / std::max(1.0, std::abs(ref)));
+            }
+        }
+        report("moe_grouped_qgemm q2_K (fp64)", eg, 5e-3);
+        report("moe_grouped_qswiglu q2_K (fp64)", es, 5e-3);
+    }
+
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL PASS", g_fail);
     return g_fail ? 1 : 0;
 }
