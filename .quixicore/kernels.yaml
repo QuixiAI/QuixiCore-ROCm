@@ -706,6 +706,79 @@ operations:
         status: imported
         path: kernels/ssm/fftconv/variants/rocm_cdna3
 
+  mamba2_backward:
+    family: ssm
+    status: implemented
+    path: kernels/ssm/phase9_ssm
+    notes: >-
+      Phase 9 fp32 Mamba2 backward using direct per-output gradient kernels for
+      grad_c, grad_b/grad_x, and grad_cumulative_log to avoid unordered
+      atomics.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/ssm/phase9_ssm/variants/rocm_cdna3
+
+  ssd_chunked_backward:
+    family: ssm
+    status: implemented
+    path: kernels/ssm/phase9_ssm
+    notes: >-
+      Phase 9 fp32 SSD chunked backward, matching the CPU alias to Mamba2
+      backward over the materialized triangular dependency.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/ssm/phase9_ssm/variants/rocm_cdna3
+
+  ssd_decode:
+    family: ssm
+    status: implemented
+    path: kernels/ssm/phase9_ssm
+    notes: >-
+      Phase 9 fp32 single-token SSD decode, S' = alpha*S + x outer k and
+      y = S' @ q, with one wave64 block per state row.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/ssm/phase9_ssm/variants/rocm_cdna3
+
+  dsv4_hc_pre:
+    family: ssm
+    status: implemented
+    path: kernels/ssm/phase9_ssm
+    notes: >-
+      Phase 9 DeepSeek-V4 hyper-connection pre-combine over the fixed four
+      connection inputs.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/ssm/phase9_ssm/variants/rocm_cdna3
+
+  dsv4_hc_post:
+    family: ssm
+    status: implemented
+    path: kernels/ssm/phase9_ssm
+    notes: >-
+      Phase 9 DeepSeek-V4 hyper-connection post-combine with per-token
+      source-to-destination combination matrix.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/ssm/phase9_ssm/variants/rocm_cdna3
+
+  dsv4_hc_comb:
+    family: ssm
+    status: implemented
+    path: kernels/ssm/phase9_ssm
+    notes: >-
+      Phase 9 DeepSeek-V4 hyper-connection combination matrix construction:
+      row softmax plus Sinkhorn-style column/row normalization.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/ssm/phase9_ssm/variants/rocm_cdna3
+
   based:
     family: linear_attention
     status: imported

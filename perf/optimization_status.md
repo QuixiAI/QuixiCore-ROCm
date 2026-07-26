@@ -2428,3 +2428,46 @@ fp32-only operation-level parity; FP16/BF16 storage wrappers are explicit
 non-ports until a shared floating storage dispatcher exists in the ROCm backend.
 
 Raw results: `perf/results/2026-07-26/phase8-linear-final2/bench.txt`.
+
+## 2026-07-26: State-Space And Hyper-Connections Phase 9 - LANDED
+
+Status: landed.
+
+Current implementation: `kernels/ssm/phase9_ssm/variants/rocm_cdna3`.
+Current public route: Phase 9 operation entries in `.quixicore/kernels.yaml`:
+`mamba2_backward`, `ssd_chunked_backward`, `ssd_decode`, `dsv4_hc_pre`,
+`dsv4_hc_post`, and `dsv4_hc_comb`.
+
+References inspected: CPU `ssm/ssm_extended_ref.cpp` for Mamba2/SSD,
+CPU `linear_attention/llama_recurrent_ref.cpp` for DSV4 hyper-connections,
+Metal `ssm/mamba2/mamba2.metal`, and existing ROCm
+`kernels/ssm/mamba2/variants/rocm_cdna3/mamba2_ssd.cu`.
+
+Correctness: `make -C kernels/ssm/phase9_ssm/variants/rocm_cdna3 test` and
+archived `bench` both report `ALL PASS`. The harness has 13 checks covering
+Mamba2 backward grad_c/grad_b/grad_x/grad_cumulative_log,
+`ssd_chunked_backward` over the same four outputs, `ssd_decode` y/next_state,
+and DSV4 comb/pre/post.
+
+Baseline and experiments on MI300X gfx942, ROCm 7.2.4, HIP 7.2.53211,
+bare metal, command
+`HIP_VISIBLE_DEVICES=0 make -C kernels/ssm/phase9_ssm/variants/rocm_cdna3 bench`.
+Benchmarks used printed warmups/iterations; fast kernels use repeated launches
+per timing sample and report per-launch medians.
+
+| route / shape | baseline | candidate/current | decision |
+| --- | ---: | ---: | --- |
+| `mamba2_backward`, fp32 B=4,H=4,N=64,D=32 | bh-serial 35.1509 ms | direct gradient kernels 0.2497 ms, 140.80x | keep direct kernels |
+| `ssd_chunked_backward`, fp32 B=2,H=4,N=48,D=32 | bh-serial 20.0237 ms | direct gradient kernels 0.0921 ms, 217.51x | keep direct kernels |
+| `ssd_decode`, fp32 B=512,H=8,D=64 | bh-serial 1.3433 ms, 0.0 TFLOP/s | wave64 row route 0.1297 ms, 0.5 TFLOP/s, 10.36x | keep wave64 |
+| `dsv4_hc_comb`, fp32 tokens=65536,iters=3 | scalar 244.1768 ms | token-parallel 0.0090 ms, 1164.6 GB/s, 27120.21x | keep token route |
+| `dsv4_hc_pre`, fp32 tokens=65536,E=256 | token-serial 1.0354 ms, 325.1 GB/s | elementwise 0.0901 ms, 3736.9 GB/s, 11.49x | keep elementwise route |
+| `dsv4_hc_post`, fp32 tokens=32768,E=256 | token-destination-serial 2.4479 ms, 124.4 GB/s | elementwise 0.1792 ms, 1700.0 GB/s, 13.66x | keep elementwise route |
+
+Decision: KEEP the Phase 9 ports. The Mamba2/SSD backward path trades CPU-style
+in-place accumulation for direct per-output formulas, which preserves the
+triangular dependency without atomics. `ssd_decode` maps the Metal row-owned
+state update to wave64, and the DSV4 stages are straightforward token or
+elementwise parallel ports.
+
+Raw results: `perf/results/2026-07-26/phase9-ssm-final3/bench.txt`.

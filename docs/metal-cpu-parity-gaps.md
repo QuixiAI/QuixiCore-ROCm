@@ -49,12 +49,12 @@ the kernel; a missing entry does not.
 | 6 | Quant authoring & quantized embedding | 14 | 0 | 0 | **14** |
 | 7 | Sampling & embedding stragglers | 6 | 0 | 0 | **6** |
 | 8 | Linear attention | 9 | 0 | 0 | **9** |
-| 9 | State-space & hyper-connections | 6 | 6 | 0 | 0 |
+| 9 | State-space & hyper-connections | 6 | 0 | 0 | **6** |
 | 10 | Training & distillation | 10 | 10 | 0 | 0 |
 | 11 | Elementwise & tensor-op surface | 42 | 42 | 0 | 0 |
 | 12 | Convolution & audio | 16 | 16 | 0 | 0 |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **104** | **0** | **74** |
+| | **Total** | **178** | **98** | **0** | **80** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -327,18 +327,25 @@ unnormalized linear attention, with raw output archived under
 
 ## Phase 9 — State-Space And Hyper-Connections (6)
 
-Extends `kernels/ssm/mamba2/variants/rocm_cdna3/mamba2_ssd.cu`. The backward
+Landed in `kernels/ssm/phase9_ssm/variants/rocm_cdna3`. The backward
 chunk-scan is the hard one; the landed forward SSD kernel supplies the chunk
 decomposition to mirror.
 
+2026-07-26 update: the Phase 9 harness reports `ALL PASS` for Mamba2 backward,
+SSD chunked backward, SSD decode output/next-state, and DSV4 hyper-connection
+comb/pre/post. The Mamba2 backward kernels compute direct per-output gradients
+to avoid unordered atomics; `ssd_decode` uses one wave64 row per state/output
+row. Raw benchmark output is archived under
+`perf/results/2026-07-26/phase9-ssm-final3/`.
+
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `mamba2_backward` | `ssm/ssm_extended_ref.cpp` | `ssm/mamba2` | planned |
-| `ssd_chunked_backward` | `ssm/ssm_extended_ref.cpp` | `ssm/mamba2` | planned |
-| `ssd_decode` | `ssm/ssm_extended_ref.cpp` | `ssm/mamba2` | planned |
-| `dsv4_hc_pre` | `ssm/ssm_extended_ref.cpp` | — | planned |
-| `dsv4_hc_post` | `ssm/ssm_extended_ref.cpp` | — | planned |
-| `dsv4_hc_comb` | `ssm/ssm_extended_ref.cpp` | — | planned |
+| `mamba2_backward` | `ssm/ssm_extended_ref.cpp` | `ssm/mamba2` | **landed** |
+| `ssd_chunked_backward` | `ssm/ssm_extended_ref.cpp` | `ssm/mamba2` | **landed** |
+| `ssd_decode` | `ssm/ssm_extended_ref.cpp` | `ssm/mamba2` | **landed** |
+| `dsv4_hc_pre` | `linear_attention/llama_recurrent_ref.cpp` | — | **landed** |
+| `dsv4_hc_post` | `linear_attention/llama_recurrent_ref.cpp` | — | **landed** |
+| `dsv4_hc_comb` | `linear_attention/llama_recurrent_ref.cpp` | — | **landed** |
 
 ## Phase 10 — Training And Distillation (10)
 
