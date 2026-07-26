@@ -58,6 +58,14 @@ families:
     status: partial
     paths:
       - kernels/optimizers
+  conv:
+    status: partial
+    paths:
+      - kernels/conv
+  audio:
+    status: partial
+    paths:
+      - kernels/audio
   collectives:
     status: experimental
     paths:
@@ -648,6 +656,155 @@ operations:
       - name: rocm_cdna3
         status: implemented
         path: kernels/utils/phase11_tensor_ops/variants/rocm_cdna3
+
+  im2col_2d:
+    family: conv
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  im2col_3d:
+    family: conv
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  col2im_1d:
+    family: conv
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  col2im_2d:
+    family: conv
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  conv2d:
+    family: conv
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    notes: Phase 12 direct NCHW convolution route.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  conv3d:
+    family: conv
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  depthwise_conv2d:
+    family: conv
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  conv_transpose_1d:
+    family: conv
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    notes: Phase 12 destination-owned transposed-conv route avoiding unordered atomics.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  conv_transpose_2d:
+    family: conv
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    notes: Phase 12 destination-owned transposed-conv route avoiding unordered atomics.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  pool1d:
+    family: conv
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  pool2d:
+    family: conv
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  pool2d_backward:
+    family: conv
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    notes: Phase 12 destination-owned average/max pool backward route.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  audio_conv1d_direct:
+    family: audio
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  audio_depthwise_conv1d:
+    family: audio
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  audio_causal_depthwise_conv1d:
+    family: audio
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
+
+  audio_relative_attention:
+    family: audio
+    status: implemented
+    path: kernels/conv/phase12_conv_audio
+    notes: Phase 12 row-owned chunked relative attention preserving lengths, relative shifts, per-dimension scaling, and softcap.
+    variants:
+      - name: rocm_cdna3
+        status: implemented
+        path: kernels/conv/phase12_conv_audio/variants/rocm_cdna3
 
   qgemv:
     family: quantization

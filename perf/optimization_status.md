@@ -2566,3 +2566,46 @@ stack use; `set_rows` and `tensor_set_4d` preserve CPU last-writer order by
 scanning from the destination side.
 
 Raw results: `perf/results/2026-07-26/phase11-tensor-ops-final4/bench.txt`.
+
+## 2026-07-26: Convolution And Audio Phase 12 - LANDED
+
+Status: landed.
+
+Current implementation: `kernels/conv/phase12_conv_audio/variants/rocm_cdna3`.
+Current public route: Phase 12 operation entries in `.quixicore/kernels.yaml`:
+`im2col_2d`, `im2col_3d`, `col2im_1d`, `col2im_2d`, `conv2d`, `conv3d`,
+`depthwise_conv2d`, `conv_transpose_1d`, `conv_transpose_2d`, `pool1d`,
+`pool2d`, `pool2d_backward`, `audio_conv1d_direct`,
+`audio_depthwise_conv1d`, `audio_causal_depthwise_conv1d`, and
+`audio_relative_attention`.
+
+References inspected: CPU `vision/conv_pool_ref.cpp`,
+`audio/conv1d_ref.cpp`, and `audio/relative_attention_ref.cpp`.
+
+Correctness: `make -C kernels/conv/phase12_conv_audio/variants/rocm_cdna3 test`
+and archived `bench` both report `ALL PASS`. The harness has 19 host-oracle
+checks covering im2col/col2im, direct/depthwise/transposed convolution, average
+and max pool modes, pool backward, direct/depthwise/causal audio conv, and audio
+relative attention.
+
+Baseline and experiments on MI300X gfx942, ROCm 7.2.4, HIP 7.2.53211,
+bare metal, command
+`HIP_VISIBLE_DEVICES=0 make -C kernels/conv/phase12_conv_audio/variants/rocm_cdna3 bench`.
+Benchmarks used printed warmups/iterations; fast kernels use repeated launches
+per timing sample and report per-launch medians.
+
+| route / shape | baseline | candidate/current | decision |
+| --- | ---: | ---: | --- |
+| `im2col_2d`, fp32 B=2,C=8,H=W=16,KH=KW=3 | scalar 28.0258 ms | direct elementwise 0.0044 ms, 66.4 GB/s, 6308.91x | keep direct route |
+| `conv2d`, fp32 B=2,IC=8,OC=8,H=W=16,KH=KW=3 | scalar 41.8502 ms | direct output-owned 0.0126 ms, 3308.59x | keep direct route |
+| `pool2d`, fp32 B=2,C=8,H=W=16,KH=KW=3 | scalar 7.2900 ms | direct output-owned 0.0045 ms, 33.0 GB/s, 1632.94x | keep direct route |
+| `audio_conv1d_direct`, fp32 B=2,T=128,C=16,O=16,K=5 | scalar 23.9300 ms | direct output-owned 0.0128 ms, 0.1 TFLOP/s, 1874.05x | keep direct route |
+| `audio_relative_attention`, fp32 B=2,T=32,H=2,D=64 | scalar 48.1642 ms | row-owned chunked softmax 0.9626 ms, 50.03x | keep row-owned route |
+
+Decision: KEEP the Phase 12 ports. These are correctness-first direct kernels,
+not the final convolution performance story. Scatter-style routes (`col2im`,
+transposed conv, and pool backward) are destination-owned to avoid unordered
+atomics. The next optimization lever is still an im2col-plus-MFMA or direct
+shared-tile convolution path for larger production shapes.
+
+Raw results: `perf/results/2026-07-26/phase12-conv-audio-final3/bench.txt`.

@@ -52,9 +52,9 @@ the kernel; a missing entry does not.
 | 9 | State-space & hyper-connections | 6 | 0 | 0 | **6** |
 | 10 | Training & distillation | 10 | 0 | 0 | **10** |
 | 11 | Elementwise & tensor-op surface | 42 | 0 | 0 | **42** |
-| 12 | Convolution & audio | 16 | 16 | 0 | 0 |
+| 12 | Convolution & audio | 16 | 0 | 0 | **16** |
 | 13 | Vision | 19 | 19 | 0 | 0 |
-| | **Total** | **178** | **41** | **0** | **137** |
+| | **Total** | **178** | **25** | **0** | **153** |
 
 ## Phase 0 — Harness Infrastructure
 
@@ -431,34 +431,36 @@ archived under `perf/results/2026-07-26/phase11-tensor-ops-final4/`.
 
 ## Phase 12 — Convolution And Audio (16)
 
-New `kernels/conv/` and `kernels/audio/` families — neither exists in this repo
-today. Audio routes preserve `[B,T,C]`, `[O,K,C]`/`[C,K]`, stride/padding/
-dilation, optional bias, and explicit symmetric-versus-causal geometry.
-`audio_relative_attention` preserves chunk/left/right geometry, learned
-per-dimension query scaling, relative shifts, lengths, and optional softcap.
+Landed in `kernels/conv/phase12_conv_audio/variants/rocm_cdna3`. Audio routes
+preserve `[B,T,C]`, `[O,K,C]`/`[C,K]`, stride/padding/dilation, optional bias,
+and explicit symmetric-versus-causal geometry. `audio_relative_attention`
+preserves chunk/left/right geometry, learned per-dimension query scaling,
+relative shifts, lengths, and optional softcap.
 
-Perf lever for this phase: im2col + MFMA-GEMM versus direct convolution. Measure
-both and record the crossover, mirroring the `int8_gemm` scalar-vs-sdot4 A/B
-already in the notebook.
+2026-07-26 update: the Phase 12 harness reports `ALL PASS` for 19 host-oracle
+checks covering im2col/col2im, direct/depthwise/transposed conv, average and max
+pooling, pool backward, direct/depthwise/causal audio conv, and audio relative
+attention. Raw benchmark output is archived under
+`perf/results/2026-07-26/phase12-conv-audio-final3/`.
 
 | Kernel | CPU reference | Metal source | Status |
 | --- | --- | --- | --- |
-| `im2col_2d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `im2col_3d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `col2im_1d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `col2im_2d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `conv2d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `conv3d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `depthwise_conv2d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `conv_transpose_1d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `conv_transpose_2d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `pool1d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `pool2d` | `vision/conv_pool_ref.cpp` | — | planned |
-| `pool2d_backward` | `vision/conv_pool_ref.cpp` | — | planned |
-| `audio_conv1d_direct` | `audio/conv1d_ref.cpp` | — | planned |
-| `audio_depthwise_conv1d` | `audio/conv1d_ref.cpp` | — | planned |
-| `audio_causal_depthwise_conv1d` | `audio/conv1d_ref.cpp` | — | planned |
-| `audio_relative_attention` | `audio/relative_attention_ref.cpp` | — | planned |
+| `im2col_2d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `im2col_3d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `col2im_1d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `col2im_2d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `conv2d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `conv3d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `depthwise_conv2d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `conv_transpose_1d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `conv_transpose_2d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `pool1d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `pool2d` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `pool2d_backward` | `vision/conv_pool_ref.cpp` | — | **landed** |
+| `audio_conv1d_direct` | `audio/conv1d_ref.cpp` | — | **landed** |
+| `audio_depthwise_conv1d` | `audio/conv1d_ref.cpp` | — | **landed** |
+| `audio_causal_depthwise_conv1d` | `audio/conv1d_ref.cpp` | — | **landed** |
+| `audio_relative_attention` | `audio/relative_attention_ref.cpp` | — | **landed** |
 
 ## Phase 13 — Vision (19)
 
