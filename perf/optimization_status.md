@@ -2219,3 +2219,30 @@ the reference is generic over QuantFormat and the kernel is templated on FMT, so
 other formats are a instantiation away.
 
 Raw results: terminal output of `make test` in the variant directory.
+
+## 2026-07-26: kv_cache_scale_update (Phase 2, 10/17) — LANDED
+
+Status: landed (correctness-first port; no speedup claimed).
+
+`kernels/serving/kv_cache_scale_update/variants/rocm_cdna3`. amax over key and
+value, divided by 240, then a monotone max against the incoming scale so it
+never shrinks. Non-finite input rejects the call.
+
+The divisor is 240, NOT the 448 the MXFP8 codec next door uses (448 is the
+largest finite E4M3FN magnitude). Copying the neighbouring constant yields
+scales ~1.87x too small and a cache that quietly clips.
+
+Reduction is block-local wave max then an atomicMax on the float bit pattern —
+valid only because these are magnitudes, where IEEE-754 bit order matches
+numeric order for non-negatives.
+
+Correctness: `make test` -> ALL PASS, and **bit-exact** against the host, which a
+max reduction should be (order-independent, unlike a sum): old=0, old-dominates,
+single-element, and non-finite-rejected all exact.
+
+Mutation-verified: swapping the divisor to 448 fails 2 of 4 cases. The
+old-dominates case correctly still passes, since the incoming scale loses the
+max regardless — a reminder that a test whose expected value is insensitive to
+the mutation proves nothing about it.
+
+Baseline: none; functional port, no speedup claimed.
