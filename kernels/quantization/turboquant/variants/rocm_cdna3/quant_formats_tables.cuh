@@ -442,4 +442,114 @@ __device__ __forceinline__ void dequant8<iq1_s>(const uint8_t* base, int col0, f
     }
 }
 
+// ---- dequant4 span specializations for the k-quants: the MFMA B fragment gives
+// each lane 4 contiguous K (k0 + 4*(lane/16) + {0..3}), not 8, so the 8-span
+// decoders above cannot be used directly. Every span constant here depends only
+// on bits >=4 of the in-block column (sub-block index, packed sub-scale, nibble
+// shift, high-bit mask), and a 4-aligned 4-span never crosses a 16-wide
+// sub-block — so the bodies are the dequant8 bodies with a 4-iteration tail.
+// This is what makes in-GEMM k-quant decode viable: one sub-scale unpack per
+// fragment instead of four. Bit-identical to FMT::dequant per element. ----
+template<>
+__device__ __forceinline__ void dequant4<q2_K>(const uint8_t* base, int col0, float w[4]) {
+    const uint8_t* scales = base;
+    const uint8_t* qs = base + 16;
+    const float d = half_at(base + 80), dmin = half_at(base + 82);
+    const int chunk = col0 >> 7, pos = col0 & 127, sidx = pos >> 5, sub = (pos >> 4) & 1;
+    const int l0 = pos & 15;
+    const int is = chunk * 8 + sidx * 2 + sub;
+    const float dl = d * float(scales[is] & 0xF);
+    const float ml = dmin * float(scales[is] >> 4);
+    const uint8_t* qp = qs + chunk * 32 + sub * 16 + l0;
+    #pragma unroll
+    for (int i = 0; i < 4; i++) w[i] = dl * float((qp[i] >> (2 * sidx)) & 3) - ml;
+}
+template<>
+__device__ __forceinline__ void dequant4<q3_K>(const uint8_t* base, int col0, float w[4]) {
+    const uint8_t* hmask = base;
+    const uint8_t* qs = base + 32;
+    const uint8_t* sca = base + 96;
+    const float d = half_at(base + 108);
+    const int chunk = col0 >> 7, pos = col0 & 127, sidx = pos >> 5, sub = (pos >> 4) & 1;
+    const int l0 = pos & 15;
+    const int is = chunk * 8 + sidx * 2 + sub;
+    const int ww = is >> 2, b = is & 3;
+    int s;
+    if      (ww == 0) s = (sca[b] & 0xF)            | ((sca[8 + b] & 3) << 4);
+    else if (ww == 1) s = (sca[4 + b] & 0xF)        | (((sca[8 + b] >> 2) & 3) << 4);
+    else if (ww == 2) s = ((sca[b] >> 4) & 0xF)     | (((sca[8 + b] >> 4) & 3) << 4);
+    else              s = ((sca[4 + b] >> 4) & 0xF) | (((sca[8 + b] >> 6) & 3) << 4);
+    const float ds = d * float(s - 32);
+    const uint8_t* qp = qs + chunk * 32 + sub * 16 + l0;
+    const uint8_t* hp = hmask + sub * 16 + l0;
+    const int hbit = 1 << (chunk * 4 + sidx);
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        const int low2 = (qp[i] >> (2 * sidx)) & 3;
+        w[i] = ds * float((low2 | ((hp[i] & hbit) ? 4 : 0)) - 4);
+    }
+}
+template<>
+__device__ __forceinline__ void dequant4<q4_K>(const uint8_t* base, int col0, float w[4]) {
+    const float d = half_at(base, 0), dmin = half_at(base, 1);
+    const uint8_t* scales = base + 4;
+    const uint8_t* qs = base + 16;
+    const int chunk = col0 / 64, pos = col0 % 64;
+    const int sub = chunk * 2 + (pos >= 32 ? 1 : 0);
+    const int sh = (pos < 32) ? 0 : 4;
+    const uint8_t* qp = qs + chunk * 32 + ((pos < 32) ? pos : pos - 32);
+    int sc, m;
+    if (sub < 4) { sc = scales[sub] & 63; m = scales[sub + 4] & 63; }
+    else {
+        sc = (scales[sub + 4] & 0x0F) | ((scales[sub - 4] >> 6) << 4);
+        m  = (scales[sub + 4] >> 4)   | ((scales[sub]     >> 6) << 4);
+    }
+    const float dsc = d * float(sc), dm = dmin * float(m);
+    #pragma unroll
+    for (int i = 0; i < 4; i++) w[i] = dsc * float((qp[i] >> sh) & 0x0F) - dm;
+}
+template<>
+__device__ __forceinline__ void dequant4<q5_K>(const uint8_t* base, int col0, float w[4]) {
+    const float d = half_at(base, 0), dmin = half_at(base, 1);
+    const uint8_t* sca = base + 4;
+    const uint8_t* qh = base + 16;
+    const uint8_t* qs = base + 48;
+    const int chunk = col0 >> 6, pos = col0 & 63, sub = pos >> 5, l0 = pos & 31;
+    const int is = 2 * chunk + sub;
+    int sc, mn;
+    if (is < 4) { sc = sca[is] & 63; mn = sca[is + 4] & 63; }
+    else {
+        sc = (sca[is + 4] & 0x0F) | ((sca[is - 4] >> 6) << 4);
+        mn = (sca[is + 4] >> 4)   | ((sca[is]     >> 6) << 4);
+    }
+    const float dsc = d * float(sc), dm = dmin * float(mn);
+    const uint8_t* qp = qs + chunk * 32 + l0;
+    const uint8_t* hp = qh + l0;
+    const int sh = sub ? 4 : 0;
+    const int hbit = 1 << (2 * chunk + sub);
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        const int q = ((qp[i] >> sh) & 0xF) + ((hp[i] & hbit) ? 16 : 0);
+        w[i] = dsc * float(q) - dm;
+    }
+}
+template<>
+__device__ __forceinline__ void dequant4<q6_K>(const uint8_t* base, int col0, float w[4]) {
+    const uint8_t* ql = base;
+    const uint8_t* qh = base + 128;
+    const int8_t* sca = reinterpret_cast<const int8_t*>(base + 192);
+    const float d = half_at(base + 208);
+    const int chunk = col0 >> 7, pos = col0 & 127, group = pos >> 5, l0 = pos & 31;
+    const float dsc = d * float(int(sca[chunk * 8 + (l0 >> 4) + group * 2]));
+    const uint8_t* qlp = ql + chunk * 64 + l0 + 32 * (group & 1);
+    const uint8_t* qhp = qh + chunk * 32 + l0;
+    const int sh = (group & 2) ? 4 : 0;
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        const int nib = (qlp[i] >> sh) & 0xF;
+        const int q = (nib | (((qhp[i] >> (2 * group)) & 3) << 4)) - 32;
+        w[i] = dsc * float(q);
+    }
+}
+
 }  // namespace tmq

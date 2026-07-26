@@ -45,6 +45,9 @@ __device__ __forceinline__ half4_t load_xfrag(const __half* X, int K, int m0, in
 // B operand: 4 contiguous K of one W row (n = n0 + l%16), dequantized. The 4 k's
 // (k0 + 4*(l/16) .. +3) stay inside one quant block: k-in-block is 0/4/8/12 and
 // every format has block_k a multiple of 16, so col..col+3 is within the block.
+// Decoding goes through dequant4<FMT>, so the 256-superblock k-quants unpack
+// their sub-scale once per fragment instead of once per element; formats without
+// a specialization fall back to 4 plain FMT::dequant calls (unchanged codegen).
 template<typename FMT>
 __device__ __forceinline__ half4_t load_wfrag(const uint8_t* Wq, int bpr, int n0, int k0) {
     const int l = threadIdx.x & 63;
@@ -52,11 +55,13 @@ __device__ __forceinline__ half4_t load_wfrag(const uint8_t* Wq, int bpr, int n0
     const int k = k0 + (l >> 4) * 4;
     const int kb = k / FMT::block_k, cin = k % FMT::block_k;
     const uint8_t* base = Wq + (size_t(n) * bpr + kb) * FMT::block_bytes;
+    float wf[4];
+    dequant4<FMT>(base, cin, wf);
     half4_t b;
-    b[0] = (__fp16)FMT::dequant(base, cin);
-    b[1] = (__fp16)FMT::dequant(base, cin + 1);
-    b[2] = (__fp16)FMT::dequant(base, cin + 2);
-    b[3] = (__fp16)FMT::dequant(base, cin + 3);
+    b[0] = (__fp16)wf[0];
+    b[1] = (__fp16)wf[1];
+    b[2] = (__fp16)wf[2];
+    b[3] = (__fp16)wf[3];
     return b;
 }
 

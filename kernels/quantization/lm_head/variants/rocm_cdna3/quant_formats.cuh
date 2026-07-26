@@ -359,6 +359,17 @@ __device__ __forceinline__ void dequant8(const uint8_t* base, int col0, float w[
     for (int i = 0; i < 8; i++) w[i] = FMT::dequant(base, col0 + i);
 }
 
+// ---- span helper: dequant 4 contiguous columns (the MFMA B-fragment per-lane
+// unit — v_mfma_f32_16x16x16_f16 gives each lane k = k0 + 4*(lane/16) + {0..3}).
+// col0 is always a multiple of 4 and, like the 8-span, never straddles a block.
+// Formats whose sub-block scale decode is expensive specialize this in
+// quant_formats_tables.cuh; the generic path is 4 plain element decodes. ----
+template<typename FMT>
+__device__ __forceinline__ void dequant4(const uint8_t* base, int col0, float w[4]) {
+    #pragma unroll
+    for (int i = 0; i < 4; i++) w[i] = FMT::dequant(base, col0 + i);
+}
+
 // ---- span specializations (TM tk_dequant8): hoist the block scale to ONE
 // decode per 8-span instead of one per element, and batch the nibble/code
 // extraction. col0 is always a multiple of 8 and the span never straddles a
