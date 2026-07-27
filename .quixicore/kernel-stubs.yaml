@@ -1,0 +1,616 @@
+---
+schema_version: 0.2
+backend: rocm
+backend_revision: 636ae5ae983f
+inventory_date: '2026-07-27'
+abi: kernel_call_v1
+generated_from:
+- QuixiCore/registry/operations.yaml
+- ".quixicore/kernels.yaml"
+canonical_operation_count: 303
+stub_count: 113
+stubs:
+  act_quant_int8:
+    family: quantization
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - act_quant_int8
+  adamw:
+    family: optimizers
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - adamw
+  adaptive_norm_modulation:
+    family: diffusion
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  adaptive_norm_modulation_qkv:
+    family: diffusion
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  adaptive_rms_norm_modulation:
+    family: diffusion
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  adaptive_rms_norm_modulation_qkv:
+    family: diffusion
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  all_gather_gemm:
+    family: collectives
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  all_reduce_rms_norm:
+    family: collectives
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  argmax:
+    family: sampling
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - argmax
+  attention_gate_residual:
+    family: attention
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  attention_with_lse:
+    family: attention
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - attention_with_lse
+  audio_conv1d:
+    family: audio
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - audio_conv1d
+  audio_resample:
+    family: audio
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  causal_conv3d_cache_update:
+    family: convolution
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  causal_conv_gate_residual:
+    family: audio
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  classifier_free_guidance_combine:
+    family: diffusion
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  classifier_free_guidance_scheduler_step:
+    family: diffusion
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  conv_transpose_overlap_add:
+    family: audio
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  cross_entropy:
+    family: utils
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - cross_entropy
+  cross_entropy_backward:
+    family: utils
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - cross_entropy_backward
+  ctc_decode:
+    family: audio
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  deformable_attention:
+    family: vision
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  deterministic_noise:
+    family: diffusion
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  diffusion_scheduler_step:
+    family: diffusion
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  down_projection_residual:
+    family: matmul
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  downsample_3d:
+    family: convolution
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  downsample_conv2d:
+    family: convolution
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  dropout:
+    family: utils
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - dropout
+  embedding_backward:
+    family: serving
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - embedding_backward
+  embedding_lookup:
+    family: serving
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - embedding_lookup
+  flow_euler_step:
+    family: diffusion
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  flow_step_action_clamp_denormalize:
+    family: vla_world_models
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  fp8_gemm:
+    family: quantization
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - fp8_gemm
+  gate_up_projection_swiglu:
+    family: matmul
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  geglu_projection:
+    family: matmul
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  gelu:
+    family: activations
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - gelu
+  gelu_backward:
+    family: activations
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - gelu_backward
+  gguf_gemv:
+    family: quantization
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - gguf_gemv
+  glu:
+    family: activations
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - glu
+  grammar_mask:
+    family: sampling
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  grid_sample:
+    family: vision
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  group_norm_silu:
+    family: convolution
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  hadamard:
+    family: utils
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - hadamard
+  indexer_k_gather:
+    family: serving
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - indexer_k_gather
+  istft:
+    family: audio
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  joint_multimodal_attention:
+    family: multimodal
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  kv_cache_compact:
+    family: serving
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  kv_cache_copy_blocks_q8_0:
+    family: serving
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - kv_cache_copy_blocks_q8_0
+  kv_cache_gather:
+    family: serving
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - kv_cache_gather
+  kv_cache_gather_q8_0:
+    family: serving
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - kv_cache_gather_q8_0
+  kv_cache_offload:
+    family: serving
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  kv_cache_scatter:
+    family: serving
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - kv_cache_scatter
+  kv_cache_scatter_q8_0:
+    family: serving
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - kv_cache_scatter_q8_0
+  linear_attention:
+    family: linear_attention
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - linear_attn
+  log_mel_spectrogram:
+    family: audio
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  logits_bias_penalties_top_k_top_p_sample:
+    family: sampling
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  lora_apply:
+    family: matmul
+    kind: operation
+    reason: family-only metadata; canonical adapter not wired
+    source_ids:
+    - lora_apply
+  lowbit_gemv:
+    family: quantization
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - qgemv_int4
+  masked_mean_pool_rms_l2:
+    family: serving
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - masked_mean_pool_rms_l2
+  mixed_prefill_decode_attention:
+    family: attention
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  moe_all_to_all_dispatch:
+    family: collectives
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  moe_grouped_gemm_swiglu:
+    family: moe
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  moe_route_top_k_prefix_sum_permute:
+    family: moe
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  moe_route_topk:
+    family: moe
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - moe_route_topk
+  moe_unpermute_weighted_reduce:
+    family: moe
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  mrope:
+    family: attention
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - mrope
+  multi_codebook_sample:
+    family: audio
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  multimodal_rope_nd:
+    family: multimodal
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  multimodal_stream_deinterleave:
+    family: multimodal
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  multimodal_stream_interleave:
+    family: multimodal
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  multistream_logits_codebook_sample:
+    family: audio
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  non_max_suppression:
+    family: vision
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  nvfp4_gemv:
+    family: quantization
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - nvfp4_gemv
+  overlap_add:
+    family: audio
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  paged_attention_output_projection_residual:
+    family: attention
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  paged_attention_q8_0:
+    family: attention
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - paged_attention_q8_0
+  patchify_nd:
+    family: diffusion
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  patchify_projection_position:
+    family: vision
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  pixel_shuffle:
+    family: vision
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  prefix_append_attention:
+    family: attention
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  qk_norm_rope_attention:
+    family: attention
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  qk_norm_rope_positioned:
+    family: norms
+    kind: operation
+    reason: family-only metadata; canonical adapter not wired
+    source_ids:
+    - qk_norm_rope_positioned
+  qkv_projection_qk_norm_rope_kv_append:
+    family: attention
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  quantize_int4_group:
+    family: quantization
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - quantize_int4_group
+  ragged_pack:
+    family: multimodal
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  ragged_unpack:
+    family: multimodal
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  reduce_scatter_gemm:
+    family: collectives
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  residual_rms_norm_quant:
+    family: norms
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  residual_vector_quantize_decode:
+    family: audio
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  residual_vector_quantize_encode:
+    family: audio
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  resize_bicubic:
+    family: vision
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  resize_bilinear:
+    family: vision
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  resize_normalize_layout_quant:
+    family: vision
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  rms_norm_backward:
+    family: norms
+    kind: operation
+    reason: family-only metadata; canonical adapter not wired
+    source_ids:
+    - rms_norm_backward
+  rnnt_beam_step:
+    family: audio
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  rnnt_joiner:
+    family: audio
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  roi_align:
+    family: vision
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  rope_3d:
+    family: diffusion
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  rotary_positioned:
+    family: attention
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - rotary_positioned
+  rvq_distance_argmin_residual_update:
+    family: audio
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  sample_categorical:
+    family: sampling
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - sample_categorical
+  selective_scan:
+    family: ssm
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - selective_scan
+  silu:
+    family: activations
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - silu
+  speculative_verify_accept_compact_kv:
+    family: serving
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  stft:
+    family: audio
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  streaming_conv1d_state:
+    family: audio
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  swiglu_oai:
+    family: activations
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - swiglu_oai
+  temporal_upsample_conv3d:
+    family: convolution
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  top_k_sample:
+    family: sampling
+    kind: operation
+    reason: partial family; canonical operation not implemented
+    source_ids:
+    - top_k_sample
+  unpatchify_nd:
+    family: diffusion
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  upsample_3d:
+    family: convolution
+    kind: primitive
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  upsample_conv2d:
+    family: convolution
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
+  window_rfft_power_mel_log:
+    family: audio
+    kind: fused
+    reason: planned contract; no backend implementation evidence
+    source_ids: []
