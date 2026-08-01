@@ -1452,16 +1452,18 @@ operations:
     status: imported
     path: kernels/serving
     notes: >-
-      Port of QuixiCore-CUDA/kernels/serving. All 13 self-checking harnesses
+      Port of QuixiCore-CUDA/kernels/serving. All 14 self-checking harnesses
       pass on MI300X: paged attention (v1/v2/cascade), GQA-staged, quantized-KV
       decode, variable-length prefill, MLA decode, fused RoPE-on-KV, KV
       scatter/gather + sliding window, sampling, logit processors, beam-cache
       reindex, speculative-decode tree, EAGLE, sparse serving, and the V2
       model-runner batch prep (slot mapping, block-table gather, input prep,
       sampled/rejected counts, post-step update, DSA indexer metadata,
-      uniform-decode expansion, DFlash input prep). hipify + mask-free __shfl_*
-      + __dp4a->sdot4 (fp8-KV path); the batch-prep family needed no CDNA3
-      adaptation -- it carries no wave-width assumption.
+      uniform-decode expansion, DFlash input prep) and the V2 sampler /
+      spec-decode kernels. hipify + mask-free __shfl_* + __dp4a->sdot4 (fp8-KV
+      path); the batch-prep family needed no CDNA3 adaptation, while the
+      sampler family keeps Triton's 32-lane reduction width and swaps
+      ex2.approx/div.full for the CDNA lowerings to hold its bitwise contract.
     variants:
       - name: rocm_cdna3
         status: imported

@@ -2818,3 +2818,60 @@ A shape-dependent block size is available but not worth the branch until the
 fusion question is settled.
 
 Raw results: `perf/results/2026-08-01/v2-batch-prep/bench.txt`.
+
+## 2026-08-01 — serving `v2_sample` (V2 sampler / spec-decode)
+
+Second harness in the serving family:
+`kernels/serving/variants/rocm_cdna3/v2_sample_test.cu` over
+`v2_sample_kernels.cuh` — the 17 sampler and spec-decode kernels (temperature,
+gumbel sampling, topk_log_softmax, ranks, fill_logprob_token_ids, penalties,
+bincount, prompt_logprobs_token_ids, rejection, resample, grammar bitmask,
+min_p, logit_bias, bad_words, local_logits_stats, insert_resampled,
+flatten_sampled).
+
+These kernels exist to be bit-exact with Triton, so the CDNA port had to
+preserve that rather than merely compile. Three things were NVIDIA-only and each
+was pinned to the CDNA lowering of the *same* Triton primitive:
+
+- `__shfl_*_sync` with a 32-bit full mask → maskless `__shfl_xor(v, off, 32)`.
+  The width is the whole point: the reduction trees reproduce Triton's
+  shfl.bfly order over 32 lanes, so a 64-lane wave must be split into two
+  independent 32-lane groups. Widening the tree would reorder the fp32 sum and
+  silently break the contract. `test_bfly_width` is the regression guard — a
+  wave seeded 1s/2s across the halves must read 32 and 64, never 96.
+- `ex2.approx.f32` → `__builtin_amdgcn_exp2f`. Measured separately against ROCm
+  Triton over 65536 samples in [-20, 20]: `tl.exp` is bitwise identical to
+  `exp2(x*log2e)`, the same shape the PTX uses.
+- `div.full.f32` → IEEE divide. NVIDIA's is the *approximate* form; ROCm
+  Triton's `/` is bitwise identical to a plain IEEE divide.
+
+Correctness: 5/5 `ALL PASS` on MI300X. The Philox stream and `tl.rand` mapping
+are checked bitwise against a host replay; temperature and min_p by exact
+replay (a mask is -inf or passthrough, and kept entries must be bitwise
+unchanged).
+
+Optimization run: **launch geometry** on `v2_temperature`, a bandwidth-bound
+elementwise divide over the full 151552-wide vocab. 20 warmup + 200 timed
+launches, `hipEvent` per-launch mean; the grid tiles the vocab over blockIdx.y
+in 8192-column chunks, as the real wrapper does.
+
+| route / shape | baseline (thr=256) | candidate (thr=1024) | decision |
+| --- | ---: | ---: | --- |
+| `v2_temperature`, T=1 V=151552 | 0.0130 ms, 93.6 GB/s | 0.0066 ms, 183.4 GB/s, 1.97x | keep |
+| `v2_temperature`, T=4 V=151552 | 0.0121 ms, 402.4 GB/s | 0.0066 ms, 729.4 GB/s, 1.83x | keep |
+| `v2_temperature`, T=32 V=151552 | 0.0228 ms, 1699.8 GB/s | 0.0181 ms, 2149.3 GB/s, 1.26x | keep |
+| `v2_temperature`, T=64 V=151552 | 0.0351 ms, 2211.0 GB/s | 0.0338 ms, 2293.8 GB/s, 1.04x | keep |
+
+Decision: **KEEP thr=1024.** Every token count improves or ties, and the gain is
+largest at the decode shapes that dominate serving — the opposite of the
+`v2_batch_prep` sweep, where a block-size win at decode reversed at prefill.
+The kernel holds no cross-lane or shared state, so the block size cannot change
+its output; re-verified bitwise after the change. Adopted in SlimServe's
+`qc_rocm_sample.cu` wrapper.
+
+Follow-up: the same sweep is worth running on `v2_min_p` and
+`v2_topk_log_softmax`, but those carry `s_part[32]` cross-warp merges indexed by
+`tid >> 5`, so the block size interacts with the reduction and each needs its
+own correctness re-check rather than a blanket change.
+
+Raw results: `perf/results/2026-08-01/v2-sample/bench.txt`.

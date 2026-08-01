@@ -1,0 +1,23 @@
+# v2_sample launch-geometry sweep + correctness
+GPU: AMD Instinct MI300X (gfx942)  ROCm 7.2.4  HIP 7.2.53211
+cmd: ./v2_sample_test.out [--bench]  warmup=20 reps=200, hipEvent per-launch mean
+
+v2_temperature T=1 V=151552 thr=256   0.0126 ms  96.1 GB/s
+v2_temperature T=1 V=151552 thr=512   0.0069 ms  175.2 GB/s
+v2_temperature T=1 V=151552 thr=1024  0.0056 ms  217.6 GB/s
+v2_temperature T=4 V=151552 thr=256   0.0121 ms  401.2 GB/s
+v2_temperature T=4 V=151552 thr=512   0.0079 ms  610.7 GB/s
+v2_temperature T=4 V=151552 thr=1024  0.0064 ms  754.9 GB/s
+v2_temperature T=32 V=151552 thr=256   0.0227 ms  1705.8 GB/s
+v2_temperature T=32 V=151552 thr=512   0.0193 ms  2007.5 GB/s
+v2_temperature T=32 V=151552 thr=1024  0.0180 ms  2154.8 GB/s
+v2_temperature T=64 V=151552 thr=256   0.0339 ms  2290.9 GB/s
+v2_temperature T=64 V=151552 thr=512   0.0365 ms  2123.7 GB/s
+v2_temperature T=64 V=151552 thr=1024  0.0341 ms  2277.0 GB/s
+
+philox tt_randint                  PASS (0/4096 mismatch)
+tl.rand tt_rand_nz                 PASS (0/4096 mismatch)
+bfly reduces 32-lane groups        PASS (0/64 mismatch)
+v2_temperature exact               PASS (0/18000 mismatch)
+v2_min_p mask + passthrough        PASS (0/10240 mismatch)
+ALL PASS

@@ -87,3 +87,47 @@ wins at decode but loses 2.4x at a 16384-token prefill chunk.
 make v2_batch_test.out && HIP_VISIBLE_DEVICES=0 ./v2_batch_test.out
 make bench    # launch-geometry sweep
 ```
+
+## v2_sample (added 2026-08-01)
+
+`v2_sample_kernels.cuh`, harness `v2_sample_test.cu`. The 17 V2 sampler /
+spec-decode kernels, ported from `SlimServe/csrc/quixicore/serving/` where they
+replace the Triton sampler: temperature, gumbel sampling, topk_log_softmax,
+ranks, fill_logprob_token_ids, penalties, bincount, prompt_logprobs_token_ids,
+rejection, resample, grammar bitmask, min_p, logit_bias, bad_words,
+local_logits_stats, insert_resampled, flatten_sampled.
+
+Unlike the batch-prep family next door, this one needed real CDNA adaptation,
+because the kernels' contract is **bitwise** equality with Triton rather than
+numerical closeness:
+
+- `__shfl_*_sync(0xffffffff, ...)` → `__shfl_xor(v, off, 32)`. The width is
+  load-bearing: the reduction trees reproduce Triton's shfl.bfly order over 32
+  lanes, so a 64-lane wave is split into two independent 32-lane groups.
+  Widening the tree to 64 would reorder the fp32 sum and break the contract
+  silently — fp32 addition is not associative. `test_bfly_width` guards it.
+- `__syncwarp` → `__builtin_amdgcn_wave_barrier` (32-lane groups are halves of
+  one wavefront and advance in lockstep).
+- `ex2.approx.f32` → `__builtin_amdgcn_exp2f`, and `div.full.f32` → IEEE
+  divide. The bitwise target is Triton *on this hardware*: measured over 65536
+  samples in [-20, 20], ROCm Triton's `tl.exp` is bitwise identical to
+  `exp2(x*log2e)` and its fp32 `/` to a plain IEEE divide, where NVIDIA's
+  `div.full.f32` is the approximate form.
+
+The harness is torch-free, so Triton is not the in-process reference; each
+pinned property is checked against a host replay that is exact by construction
+— the Philox stream and `tl.rand` mapping bitwise, temperature and min_p by
+exact replay. 5/5 pass on MI300X.
+
+**Not ported:** the turboquant trio that shares the CUDA binding unit
+(`fwht_rotate`, `permute_cols`, `moe_lora_align`) — it pulls
+`quant/turboquant.cuh`, which has its own wave32 assumptions and is not on this
+serving path.
+
+The block-size sweep and the **keep** decision for `thr=1024` on
+`v2_temperature` (1.97x at 1 token, no regressing shape) are in
+`perf/optimization_status.md` (2026-08-01).
+
+```bash
+make v2_sample_test.out && HIP_VISIBLE_DEVICES=0 ./v2_sample_test.out
+```
