@@ -2933,3 +2933,46 @@ because the block id is clamped to 0 first; the clamp is reproduced rather than
 replaced by a branch. Both are covered by the harness.
 
 Raw results: `perf/results/2026-08-01/sparse-indexer/bench.txt`.
+
+## 2026-08-01 — serving `fp8_mqa_logits` (DSA indexer MQA logits, fp8 MFMA)
+
+Fourth serving harness, and the only one in the family whose contract is
+**bitwise equality with a Triton GEMM**. That constrains the instruction and the
+summation order, so both were established by measurement rather than assumed.
+
+The dot rides `v_mfma_f32_16x16x32_fp8_fp8` — what Triton emits for
+`tl.dot(..., input_precision="ieee")` on fp8 operands, confirmed in the compiled
+AMDGCN. Same deterministic instruction with the same fragment layout and K order
+reproduces it exactly. A generic fp32 dot does not: torch's own fp32 matmul
+differs from `tl.dot` on roughly 1 element in 2048, which is why an
+"approximately equal" port was rejected.
+
+The reduction tree was **probed, not reverse-engineered**. Reading the ISA had
+stalled — permuting orderings and comparing mismatch counts kept yielding
+plausible wrong answers. Instead: force every dot to 1 so `logits` is a plain
+sum of the per-head weights, then place `1.0` at one head and `2^-24` at two
+others. `1 + 2^-24` rounds away while `1 + 2^-23` is exact, so the result
+reveals whether those two heads merged with each other before meeting the large
+one; sweeping all pairs recovers the tree. It came back a clean binary tree
+(merge-set sizes 1,3,7,15,31) decoding to a **bit-reversed** head-to-lane
+mapping, `head = bitrev4(lane % 16) + (H/2)*pair + 16*wave`. `test_tree`
+re-runs the probe as a regression guard.
+
+Correctness: 6/6 pass at H=32 (GLM-5.2's actual indexer width) and H=64 —
+exact-arithmetic bitwise equality, fp64 oracle at 1.6e-5 / 1.0e-5 relative, and
+the `-inf` window mask. The serving family is 143 pass-lines with no failures.
+
+Throughput, H=32 M=512 N=2048, 5 warmup + 50 timed launches:
+
+| route / shape | current | note |
+| --- | ---: | --- |
+| `fp8_mqa_logits`, H=32 M=512 N=2048 | 0.077 ms, 111.8 TFLOP/s | fp8 MFMA |
+
+No optimization variant is kept or rejected here: the kernel's tile shape and
+reduction order are **fixed by the bitwise contract**, not free parameters, so
+the usual sweep does not apply. End-to-end throughput in the consuming server
+was measured separately and shows no regression against the Triton path
+(1.2k prompt / 2048 generated, TP2 with dspark and turboquant, concurrency 1 to
+64; differences are inside a 20-27% run-to-run variance).
+
+Raw results: `perf/results/2026-08-01/fp8-mqa-logits/bench.txt`.

@@ -1,0 +1,12 @@
+# fp8_mqa_logits: correctness + throughput
+GPU: AMD Instinct MI300X (gfx942)  ROCm 7.2.4  HIP 7.2.53211
+
+H=32 exact-arithmetic bitwise            PASS 
+H=64 exact-arithmetic bitwise            PASS 
+H=32 fp64 oracle + window mask           PASS (rel 1.57e-05, 0 unmasked)
+H=64 fp64 oracle + window mask           PASS (rel 9.97e-06, 0 unmasked)
+H=32 reduction tree matches spec         PASS (465/465 pairs)
+H=64 reduction tree matches spec         PASS (1953/1953 pairs)
+ALL PASS
+
+fp8_mqa_logits H=32 M=512 N=2048: 0.076 ms, 112.3 TFLOP/s

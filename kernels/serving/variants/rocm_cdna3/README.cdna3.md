@@ -171,3 +171,40 @@ The block-size sweep and the **keep** decision for `thr=64` (one wave per token,
 ```bash
 make sparse_indexer_test.out && HIP_VISIBLE_DEVICES=0 ./sparse_indexer_test.out
 ```
+
+## fp8_mqa_logits (added 2026-08-01)
+
+`fp8_mqa_logits_kernel.cuh` + `mfma_fp8_dot.cuh`, harness
+`fp8_mqa_logits_test.cu`, design notes in `fp8_mqa_logits_design.md`. The DSA
+indexer MQA logits kernel:
+
+```text
+score[h,n]  = relu( (SUM_d q[m,h,d] * k[n,d]) * kscale[n] )
+logits[m,n] = SUM_h score[h,n] * weights[m,h]
+```
+
+Unlike everything else in this family, the contract here is **bitwise** equality
+with a Triton kernel for a GEMM, which constrains the instruction *and* the
+summation order. Both were established by measurement:
+
+- The dot rides `v_mfma_f32_16x16x32_fp8_fp8`, which is what Triton emits for
+  `tl.dot(..., input_precision="ieee")` on fp8 operands. Same deterministic
+  instruction, same fragment layout, same K order gives identical bits. A
+  generic fp32 dot does **not** — even torch's own fp32 matmul differs from
+  `tl.dot` on ~1 element in 2048.
+- The reduction tree was probed, not read out of the ISA. Force every dot to 1
+  so `logits` is a plain sum of the weights, then place `1.0` at one head and
+  `2^-24` at two others: `1 + 2^-24` rounds away while `1 + 2^-23` is exact, so
+  the result says whether those two heads merged with each other first.
+  Sweeping pairs recovers the tree exactly. It decodes to a **bit-reversed**
+  head-to-lane mapping, `head = bitrev4(lane % 16) + (H/2)*pair + 16*wave`,
+  which is not something a search over plausible orderings would find.
+
+`test_tree` re-runs that probe as a regression guard, so a refactor that changes
+the association fails here rather than silently diverging in production. 6/6
+pass at H=32 (what GLM-5.2 uses) and H=64, covering exact-arithmetic bitwise
+equality, an fp64 oracle, and the window mask.
+
+```bash
+make fp8_mqa_logits_test.out && HIP_VISIBLE_DEVICES=0 ./fp8_mqa_logits_test.out
+```
