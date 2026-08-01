@@ -131,3 +131,41 @@ The block-size sweep and the **keep** decision for `thr=1024` on
 ```bash
 make v2_sample_test.out && HIP_VISIBLE_DEVICES=0 ./v2_sample_test.out
 ```
+
+## sparse_indexer (added 2026-08-01)
+
+`sparse_indexer_kernels.cuh`, harness `sparse_indexer_test.cu`. Three kernels
+from the ROCm sparse-MLA path in SlimServe: request-index → global paged-slot
+conversion, per-query sparse seqlen, and the per-token fp8 K-quant with paged
+scatter.
+
+These are the first in this family with **no CUDA counterpart** — the ROCm
+sparse backend is their only consumer — so they are written for gfx942 directly
+and the Triton kernel they replace is the reference.
+
+Two findings worth keeping:
+
+- **fp8 rounding was measured.** ROCm Triton's float→fp8 cast agrees with HIP's
+  bitwise over 131577 samples across the representable range, including exact
+  midpoint ties, but **not on overflow**: Triton saturates to max-finite where
+  HIP emits NaN (e4m3fnuz, 0x80 = NaN). Unreachable in this kernel, since
+  `scale = max(1e-4, amax) / FP8_MAX` bounds the quotient by `FP8_MAX`.
+- **Semantics come from the Triton body, not its docstring.** The wrapper above
+  `_convert_req_index_to_global_index_kernel` says an invalid token yields -1;
+  the `tl.where` it describes writes **0**, and the consumer depends on 0.
+
+Test note: `slot_mapping` must be drawn **without replacement**. Two tokens
+sharing a slot race in the Triton kernel too, so a duplicate makes the
+comparison nondeterministic rather than exposing a real difference.
+
+Scope: the harness is torch-free, so K-quant is exercised with a self-contained
+e4m3fnuz conversion. Production instantiates the same kernel with
+`c10::Float8_e4m3fnuz`; that the two agree is established by SlimServe's
+differential test against Triton.
+
+The block-size sweep and the **keep** decision for `thr=64` (one wave per token,
+1.42x at 1 token, wins at every count) are in `perf/optimization_status.md`.
+
+```bash
+make sparse_indexer_test.out && HIP_VISIBLE_DEVICES=0 ./sparse_indexer_test.out
+```

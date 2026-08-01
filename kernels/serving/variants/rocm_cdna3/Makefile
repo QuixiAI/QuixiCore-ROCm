@@ -13,7 +13,7 @@ HIPFLAGS ?= -std=c++17 -O3 --offload-arch=$(OFFLOAD_ARCH) -Wno-unused-value
 
 HARNESSES = attn_q attn_varlen beam_xcache eagle_test kv_cache logits_proc_test \
             mla paged_attn_v2 rope_kv sampling sparse_serving_test spec_beam \
-            v2_batch_test v2_sample_test
+            v2_batch_test v2_sample_test sparse_indexer_test
 
 OUTS = $(addsuffix .out,$(HARNESSES))
 
@@ -28,6 +28,7 @@ test: all
 bench: all
 	HIP_VISIBLE_DEVICES=0 ./v2_batch_test.out --bench
 	HIP_VISIBLE_DEVICES=0 ./v2_sample_test.out --bench
+	HIP_VISIBLE_DEVICES=0 ./sparse_indexer_test.out --bench
 
 clean:
 	rm -f *.out

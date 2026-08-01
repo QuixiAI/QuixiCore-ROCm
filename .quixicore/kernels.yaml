@@ -1452,7 +1452,7 @@ operations:
     status: imported
     path: kernels/serving
     notes: >-
-      Port of QuixiCore-CUDA/kernels/serving. All 14 self-checking harnesses
+      Port of QuixiCore-CUDA/kernels/serving. All 15 self-checking harnesses
       pass on MI300X: paged attention (v1/v2/cascade), GQA-staged, quantized-KV
       decode, variable-length prefill, MLA decode, fused RoPE-on-KV, KV
       scatter/gather + sliding window, sampling, logit processors, beam-cache
@@ -1464,6 +1464,9 @@ operations:
       path); the batch-prep family needed no CDNA3 adaptation, while the
       sampler family keeps Triton's 32-lane reduction width and swaps
       ex2.approx/div.full for the CDNA lowerings to hold its bitwise contract.
+      Also carries the ROCm sparse-MLA indexer kernels (request-index to global
+      slot conversion, sparse seqlen, fp8 K-quant + paged scatter), which have
+      no CUDA counterpart and are written for gfx942 directly.
     variants:
       - name: rocm_cdna3
         status: imported

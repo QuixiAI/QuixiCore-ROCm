@@ -2875,3 +2875,53 @@ Follow-up: the same sweep is worth running on `v2_min_p` and
 own correctness re-check rather than a blanket change.
 
 Raw results: `perf/results/2026-08-01/v2-sample/bench.txt`.
+
+## 2026-08-01 — serving `sparse_indexer` (ROCm sparse-MLA indexer)
+
+Third serving harness: `kernels/serving/variants/rocm_cdna3/sparse_indexer_test.cu`
+over `sparse_indexer_kernels.cuh`. Unlike the other two families these kernels
+have **no CUDA counterpart** — the ROCm sparse-MLA backend is their only
+consumer — so they are written for gfx942 directly and the Triton kernel they
+replace is the reference: request-index → global paged slot conversion,
+per-query sparse seqlen, and the per-token fp8 K-quant with paged scatter.
+
+Correctness: 4/4 `ALL PASS` on MI300X. The two index kernels are exact-integer
+and checked bitwise against a host replay, covering ragged per-token lengths,
+-1 padding entries, an out-of-range block id, and a zero-length sequence that
+must be left at its zero-initialized value. K-quant is checked over the whole
+packed cache — fp8 values in their shuffled tile layout plus the fp32 scales —
+including the negative-slot skip and a near-zero row that engages the
+`max(1e-4, amax)` clamp.
+
+Two things worth recording for anyone touching this family:
+
+- **fp8 rounding was measured, not assumed.** ROCm Triton's float→fp8 cast and
+  HIP's agree bitwise over 131577 samples across the representable range,
+  including every exact midpoint tie, but disagree on *overflow*: Triton
+  saturates to max-finite where HIP emits NaN (the platform dtype is e4m3fnuz,
+  where 0x80 is NaN). Unreachable here, because
+  `scale = max(1e-4, amax) / FP8_MAX` bounds `|val / scale|` by `FP8_MAX`.
+- **slot_mapping must be drawn without replacement in any test.** Two tokens
+  sharing a slot race in the Triton kernel too, so a duplicate makes the
+  comparison nondeterministic rather than exposing a real difference. An
+  earlier run of this harness "failed" by exactly one token's 128 values plus
+  its 4-byte scale for precisely this reason.
+
+Optimization run: **launch geometry** on `indexer_k_quant_and_cache`, the hot
+one — one launch per DSA layer per forward, 78 a step on GLM-5.2. One block per
+token over a 128-wide row; 20 warmup + 500 timed launches.
+
+| route / shape | baseline (thr=128) | candidate (thr=64) | decision |
+| --- | ---: | ---: | --- |
+| `indexer_k_quant`, tokens=1 | 4.72 us | 3.32 us, 1.42x | keep |
+| `indexer_k_quant`, tokens=32 | 4.67 us | 3.35 us, 1.39x | keep |
+| `indexer_k_quant`, tokens=512 | 4.43 us | 3.42 us, 1.30x | keep |
+| `indexer_k_quant`, tokens=8192 | 8.66 us | 8.02 us, 1.08x | keep |
+
+Decision: **KEEP thr=64** — one wave per token, two elements per lane on a
+128-wide row. It wins at every token count, and 256 threads is worse still
+(13.01 us at 8192, 1.6x off the best). The amax reduction is a max, which is
+order-independent, so the block size cannot change the output; re-verified
+bitwise after the change. Adopted in SlimServe's `qc_rocm_sparse.cu` wrapper.
+
+Raw results: `perf/results/2026-08-01/sparse-indexer/bench.txt`.
