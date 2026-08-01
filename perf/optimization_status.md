@@ -2772,3 +2772,49 @@ Raw results:
 `perf/results/2026-07-26/metal-recent-rms_norm_residual_next-batched/bench.txt`,
 `perf/results/2026-07-26/metal-recent-qk_norm_rope_kv_f16-batched/bench-kv-f16.txt`,
 and `perf/results/2026-07-26/metal-recent-qgemv_fused-batched2/bench.txt`.
+
+## 2026-08-01 — serving `v2_batch_prep` (V2 model-runner batch prep)
+
+New harness `kernels/serving/variants/rocm_cdna3/v2_batch_test.cu` covering
+`v2_batch_kernels.cuh` and `slot_mapping_kernels.cuh`: the index-arithmetic
+kernels that replace the Triton batch-preparation path of the vLLM V2 GPU
+worker (slot mapping, block-table gather, prefill/decode input prep, sampled
+and rejected counts, post-step state update, DSA indexer metadata, uniform
+decode expansion, DFlash input prep).
+
+Correctness: 18/18 checks `ALL PASS` on MI300X. These are exact-integer
+kernels, so the oracle is a host replay and the bar is bitwise equality, not a
+tolerance. Coverage includes ragged query lengths, chunked prefill
+(`num_computed > 0`), context-parallel interleave (`cp_world` 1 and 2), DCP
+interleave (`dcp_world` 1 and 4), a non-trivial indexer query slice, and the
+CUDA-graph padding tails that must stay fixed-size across replay.
+
+Optimization run: **launch geometry** (threads per block), the only meaningful
+factor for kernels that are one block per request over a handful of integers.
+Measured on MI300X gfx942, ROCm 7.2.4, HIP 7.2.53211, bare metal, no torch
+linkage; 50 warmup + 2000 timed launches per point, `hipEvent` per-launch mean.
+Empty-kernel launch floor on this system is **1.56 us**.
+
+| route / shape | baseline (thr=256) | candidate (thr=64) | decision |
+| --- | ---: | ---: | --- |
+| `prepare_pos_seq_lens`, nreq=8 qlen=1 | 4.68 us | 4.04 us, 1.16x | reject |
+| `prepare_pos_seq_lens`, nreq=64 qlen=1 | 4.55 us | 3.90 us, 1.17x | reject |
+| `prepare_pos_seq_lens`, nreq=256 qlen=1 | 4.51 us | 3.93 us, 1.15x | reject |
+| `prepare_pos_seq_lens`, nreq=1 qlen=4096 | 4.55 us | 3.87 us, 1.18x | reject |
+| `prepare_pos_seq_lens`, nreq=1 qlen=16384 | 4.48 us | 10.68 us, 0.42x | reject |
+
+Decision: **REJECT the narrower block, keep 256 threads.** A block-size tuned
+on decode shapes is tuned on the case with no work to parallelize: one wave64
+wins ~15-18% at `qlen=1` but loses 2.4x at `qlen=16384`, which is exactly the
+chunked-prefill width the GLM-5.2 serving path runs
+(`--max-num-batched-tokens 16384`). Trading 0.6 us of decode latency for 6.2 us
+of prefill latency is the wrong side of the trade, and at 4.5 us the kernel is
+already within 3 us of this system's launch floor — the remaining time is
+launch overhead, not kernel work, so there is no headroom worth chasing here.
+
+Follow-up if these ever show in a profile: fuse the per-step batch-prep kernels
+into one launch rather than tuning each, since the whole family is launch-bound.
+A shape-dependent block size is available but not worth the branch until the
+fusion question is settled.
+
+Raw results: `perf/results/2026-08-01/v2-batch-prep/bench.txt`.

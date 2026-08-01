@@ -1,0 +1,49 @@
+# v2_batch_prep launch-geometry sweep
+GPU: AMD Instinct MI300X (gfx942)   ROCm 7.2.4  HIP 7.2.53211
+hipcc: AMD clang 22.0.0git roc-7.2.4
+cmd: ./v2_batch_test.out --bench   warmup=50 reps=2000, hipEvent per-launch mean
+commit: a0c3dd4d
+
+empty_kernel launch floor        1.56 us/launch
+prepare_pos_seq_lens  nreq=8    qlen=1      thr=64   3.99 us/launch
+prepare_pos_seq_lens  nreq=8    qlen=1      thr=128  4.28 us/launch
+prepare_pos_seq_lens  nreq=8    qlen=1      thr=256  4.18 us/launch
+prepare_pos_seq_lens  nreq=32   qlen=1      thr=64   3.93 us/launch
+prepare_pos_seq_lens  nreq=32   qlen=1      thr=128  4.30 us/launch
+prepare_pos_seq_lens  nreq=32   qlen=1      thr=256  4.13 us/launch
+prepare_pos_seq_lens  nreq=64   qlen=1      thr=64   3.92 us/launch
+prepare_pos_seq_lens  nreq=64   qlen=1      thr=128  4.49 us/launch
+prepare_pos_seq_lens  nreq=64   qlen=1      thr=256  4.11 us/launch
+prepare_pos_seq_lens  nreq=256  qlen=1      thr=64   3.82 us/launch
+prepare_pos_seq_lens  nreq=256  qlen=1      thr=128  4.31 us/launch
+prepare_pos_seq_lens  nreq=256  qlen=1      thr=256  4.38 us/launch
+prepare_pos_seq_lens  nreq=1    qlen=4096   thr=64   3.79 us/launch
+prepare_pos_seq_lens  nreq=1    qlen=4096   thr=128  4.34 us/launch
+prepare_pos_seq_lens  nreq=1    qlen=4096   thr=256  4.40 us/launch
+prepare_pos_seq_lens  nreq=4    qlen=4096   thr=64   3.95 us/launch
+prepare_pos_seq_lens  nreq=4    qlen=4096   thr=128  4.32 us/launch
+prepare_pos_seq_lens  nreq=4    qlen=4096   thr=256  4.43 us/launch
+prepare_pos_seq_lens  nreq=1    qlen=16384  thr=64   10.68 us/launch
+prepare_pos_seq_lens  nreq=1    qlen=16384  thr=128  6.20 us/launch
+prepare_pos_seq_lens  nreq=1    qlen=16384  thr=256  4.53 us/launch
+
+# correctness
+compute_slot_mapping cp1           PASS (0/38 mismatch)
+compute_slot_mapping cp2           PASS (0/38 mismatch)
+indexer_metadata dcp1              PASS (0/215 mismatch)
+indexer_metadata cu_ks/ke dcp1     PASS (0/54 mismatch)
+indexer_metadata dcp4              PASS (0/215 mismatch)
+indexer_metadata cu_ks/ke dcp4     PASS (0/54 mismatch)
+prepare_pos_seq_lens pos           PASS (0/27 mismatch)
+prepare_pos_seq_lens seq_lens      PASS (0/16 mismatch)
+prepare_prefill_inputs ids         PASS (0/27 mismatch)
+prepare_prefill_inputs next        PASS (0/16 mismatch)
+get_num_sampled_and_rejected       PASS (0/6 mismatch)
+  .. num_rejected                  PASS (0/6 mismatch)
+expand_idx_mapping                 PASS (0/12 mismatch)
+  .. local_pos                     PASS (0/12 mismatch)
+post_update_num_computed_tokens    PASS (0/16 mismatch)
+prepare_uniform_decode seq_lens    PASS (0/12 mismatch)
+  .. expanded_block_table          PASS (0/576 mismatch)
+  .. decode_lens                   PASS (0/12 mismatch)
+ALL PASS
