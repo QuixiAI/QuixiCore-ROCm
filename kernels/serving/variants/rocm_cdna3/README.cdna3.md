@@ -134,10 +134,12 @@ make v2_sample_test.out && HIP_VISIBLE_DEVICES=0 ./v2_sample_test.out
 
 ## sparse_indexer (added 2026-08-01)
 
-`sparse_indexer_kernels.cuh`, harness `sparse_indexer_test.cu`. Three kernels
+`sparse_indexer_kernels.cuh`, harness `sparse_indexer_test.cu`. Four kernels
 from the ROCm sparse-MLA path in SlimServe: request-index → global paged-slot
-conversion, per-query sparse seqlen, and the per-token fp8 K-quant with paged
-scatter.
+conversion, per-query sparse seqlen, the per-token fp8 K-quant with paged
+scatter, and its inverse — the gather back into the contiguous prefill
+workspace. With the last two the fp8 indexer cache is written and read with no
+Triton involved.
 
 These are the first in this family with **no CUDA counterpart** — the ROCm
 sparse backend is their only consumer — so they are written for gfx942 directly

@@ -245,6 +245,93 @@ static void test_kquant() {
 }
 
 
+
+// ------------------------------------------------------------------- gather
+// Round-trips through the quant kernel so the gather reads realistic data, and
+// seeds an invalid block to exercise the asymmetry: an invalid block still
+// writes the scale (0.0) but must leave the value row untouched.
+static void test_gather() {
+    const int num_tokens = 96, head_dim = 128, block_size = 64, nblocks = 16;
+    const int btile = 16, htile = 16, nbatch = 3;
+    const float fp8_max = 224.0f;
+    const int width = num_tokens / nbatch / block_size + 2;
+
+    std::vector<float> k((size_t)num_tokens * head_dim);
+    std::uniform_real_distribution<float> kd(-2.f, 2.f);
+    for (auto& v : k) v = kd(rng);
+    std::vector<long> all(nblocks * block_size);
+    std::iota(all.begin(), all.end(), 0L);
+    std::shuffle(all.begin(), all.end(), rng);
+    std::vector<long> slots(all.begin(), all.begin() + num_tokens);
+
+    std::vector<unsigned char> cache((size_t)nblocks * block_size * head_dim, 0);
+    std::vector<float> cscale((size_t)nblocks * block_size, 0.f);
+    auto* dk = dnew(k); auto* dc = dnew(cache);
+    auto* dcs = dnew(cscale); auto* dsl = dnew(slots);
+    indexer_k_quant_and_cache<float, qc_fp8><<<num_tokens, 64>>>(
+        dk, reinterpret_cast<qc_fp8*>(dc), dcs, dsl, block_size,
+        (long)block_size * head_dim, block_size, head_dim, btile, htile,
+        fp8_max, 1);
+    CK(hipDeviceSynchronize());
+    auto host_cache = d2h(dc, cache.size());
+    auto host_cscale = d2h(dcs, cscale.size());
+
+    const int per = num_tokens / nbatch;
+    std::vector<int> t2s(num_tokens), cu(nbatch + 1, 0);
+    for (int i = 0; i < num_tokens; ++i) t2s[i] = std::min(i / per, nbatch - 1);
+    for (int i = 0; i < num_tokens; ++i) ++cu[t2s[i] + 1];
+    for (int b = 0; b < nbatch; ++b) cu[b + 1] += cu[b];
+
+    std::vector<int> bt((size_t)nbatch * width);
+    std::uniform_int_distribution<int> bd(0, nblocks - 1);
+    for (auto& v : bt) v = bd(rng);
+    bt[0] = -1;                 // invalid block id
+    bt[width] = nblocks + 5;    // out of range
+
+    std::vector<unsigned char> kout((size_t)num_tokens * head_dim, 7);
+    std::vector<float> kscale(num_tokens, -1.f);
+    auto* dko = dnew(kout); auto* dks = dnew(kscale);
+    auto *dbt = dnew(bt), *dcu = dnew(cu), *dt2s = dnew(t2s);
+    cp_gather_indexer_quant_cache<qc_fp8><<<num_tokens, 64>>>(
+        reinterpret_cast<const qc_fp8*>(dc), dcs,
+        reinterpret_cast<qc_fp8*>(dko), dks, dbt, dcu, dt2s, block_size, width,
+        (long)block_size * head_dim, block_size, head_dim, btile, htile,
+        num_tokens, nbatch, width, nblocks, 1);
+    CK(hipDeviceSynchronize());
+    auto gotv = d2h(dko, kout.size());
+    auto gots = d2h(dks, num_tokens);
+
+    std::vector<unsigned char> wantv = kout;   // untouched where invalid
+    std::vector<float> wants(num_tokens, -1.f);
+    long mmv = 0, mms = 0;
+    for (int t = 0; t < num_tokens; ++t) {
+        const int b = t2s[t];
+        const int boff = t - cu[b];
+        const int btid = boff / block_size, blkoff = boff % block_size;
+        const bool vbt = btid >= 0 && btid < width;
+        const int bid = vbt ? bt[(size_t)b * width + btid] : -1;
+        const bool vb = vbt && bid >= 0 && bid < nblocks;
+        wants[t] = vb ? host_cscale[(size_t)bid * block_size + blkoff] : 0.0f;
+        if (!vb) continue;
+        const long src = (long)bid * block_size * head_dim +
+                         (long)(blkoff / btile) * head_dim * btile +
+                         (long)(blkoff % btile) * htile;
+        for (int i = 0; i < head_dim; ++i) {
+            const int to = (i / htile) * htile * btile + (i % htile);
+            wantv[(size_t)t * head_dim + i] = host_cache[src + to];
+        }
+    }
+    for (size_t i = 0; i < wantv.size(); ++i) mmv += (gotv[i] != wantv[i]);
+    for (int i = 0; i < num_tokens; ++i)
+        mms += (memcmp(&gots[i], &wants[i], 4) != 0);
+    rep("cp_gather values", mmv, wantv.size());
+    rep("cp_gather scales", mms, (size_t)num_tokens);
+    for (auto* p : {dk}) CK(hipFree(p));
+    CK(hipFree(dc)); CK(hipFree(dcs)); CK(hipFree(dsl));
+    CK(hipFree(dko)); CK(hipFree(dks));
+    CK(hipFree(dbt)); CK(hipFree(dcu)); CK(hipFree(dt2s));
+}
+
 // -------------------------------------------------------------------- bench
 static void bench() {
     // K-quant is the hot one: one launch per DSA layer per forward, 78 a step
@@ -289,6 +376,7 @@ int main(int argc, char** argv) {
     test_convert();
     test_seqlen();
     test_kquant();
+    test_gather();
     printf("%s\n", g_fail ? "FAILED" : "ALL PASS");
     return g_fail ? 1 : 0;
 }

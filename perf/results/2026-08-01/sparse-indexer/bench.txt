@@ -1,22 +1,23 @@
-# sparse_indexer: K-quant launch-geometry sweep + correctness
+# sparse_indexer (with gather): correctness + K-quant sweep
 GPU: AMD Instinct MI300X (gfx942)  ROCm 7.2.4  HIP 7.2.53211
-cmd: ./sparse_indexer_test.out [--bench]  warmup=20 reps=500
-
-indexer_k_quant tokens=1     thr=64   3.26 us/launch
-indexer_k_quant tokens=1     thr=128  4.57 us/launch
-indexer_k_quant tokens=1     thr=256  4.51 us/launch
-indexer_k_quant tokens=32    thr=64   3.37 us/launch
-indexer_k_quant tokens=32    thr=128  4.41 us/launch
-indexer_k_quant tokens=32    thr=256  4.54 us/launch
-indexer_k_quant tokens=512   thr=64   3.43 us/launch
-indexer_k_quant tokens=512   thr=128  4.42 us/launch
-indexer_k_quant tokens=512   thr=256  4.54 us/launch
-indexer_k_quant tokens=8192  thr=64   8.03 us/launch
-indexer_k_quant tokens=8192  thr=128  8.72 us/launch
-indexer_k_quant tokens=8192  thr=256  12.99 us/launch
 
 convert_req_index_to_global          PASS (0/2833 mismatch)
 generate_sparse_seqlen               PASS (0/13 mismatch)
 indexer_k_quant values (shuffled)    PASS (0/98304 mismatch)
 indexer_k_quant scales               PASS (0/768 mismatch)
+cp_gather values                     PASS (0/12288 mismatch)
+cp_gather scales                     PASS (0/96 mismatch)
 ALL PASS
+
+indexer_k_quant tokens=1     thr=64   3.47 us/launch
+indexer_k_quant tokens=1     thr=128  4.98 us/launch
+indexer_k_quant tokens=1     thr=256  4.79 us/launch
+indexer_k_quant tokens=32    thr=64   3.64 us/launch
+indexer_k_quant tokens=32    thr=128  4.59 us/launch
+indexer_k_quant tokens=32    thr=256  4.77 us/launch
+indexer_k_quant tokens=512   thr=64   3.64 us/launch
+indexer_k_quant tokens=512   thr=128  4.58 us/launch
+indexer_k_quant tokens=512   thr=256  4.68 us/launch
+indexer_k_quant tokens=8192  thr=64   8.23 us/launch
+indexer_k_quant tokens=8192  thr=128  8.72 us/launch
+indexer_k_quant tokens=8192  thr=256  13.00 us/launch

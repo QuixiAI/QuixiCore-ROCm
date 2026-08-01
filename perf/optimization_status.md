@@ -2885,7 +2885,8 @@ consumer — so they are written for gfx942 directly and the Triton kernel they
 replace is the reference: request-index → global paged slot conversion,
 per-query sparse seqlen, and the per-token fp8 K-quant with paged scatter.
 
-Correctness: 4/4 `ALL PASS` on MI300X. The two index kernels are exact-integer
+Correctness: 6/6 `ALL PASS` on MI300X (updated 2026-08-01 with the cache
+gather, the inverse of the K-quant scatter). The two index kernels are exact-integer
 and checked bitwise against a host replay, covering ragged per-token lengths,
 -1 padding entries, an out-of-range block id, and a zero-length sequence that
 must be left at its zero-initialized value. K-quant is checked over the whole
@@ -2923,5 +2924,12 @@ Decision: **KEEP thr=64** — one wave per token, two elements per lane on a
 (13.01 us at 8192, 1.6x off the best). The amax reduction is a max, which is
 order-independent, so the block size cannot change the output; re-verified
 bitwise after the change. Adopted in SlimServe's `qc_rocm_sparse.cu` wrapper.
+
+The gather carries two asymmetries from its Triton original that are easy to
+normalize away by accident: an invalid *token* leaves both outputs untouched,
+while an invalid *block* still writes the scale as 0.0 and leaves only the value
+row untouched. Its source load is unmasked in the original, which is safe only
+because the block id is clamped to 0 first; the clamp is reproduced rather than
+replaced by a branch. Both are covered by the harness.
 
 Raw results: `perf/results/2026-08-01/sparse-indexer/bench.txt`.
