@@ -1,0 +1,12 @@
+# MXFP4 GGUF kernels: correctness + bandwidth
+GPU: AMD Instinct MI300X (gfx942)  ROCm 7.2.4  HIP 7.2.53211
+
+dequant_mxfp4 bitwise                  PASS (0/131072)
+dequant nibble-half ordering           PASS 
+mxfp4 gemv ncols=256 nrows=64          PASS (err/|terms| 4.72e-08)
+mxfp4 gemv ncols=2048 nrows=512        PASS (err/|terms| 2.44e-08)
+mxfp4 gemv ncols=512 nrows=128         PASS (err/|terms| 3.29e-08)
+mxfp4 MoE gemv ncols=512 nrows=128     PASS (err/|terms| 5.32e-08, pad ok)
+ALL PASS
+
+mxfp4_gemv_q8_1 4096x4096: 0.0050 ms, 1792.8 GB/s (weight-bound)

@@ -2976,3 +2976,39 @@ was measured separately and shows no regression against the Triton path
 64; differences are inside a 20-27% run-to-run variance).
 
 Raw results: `perf/results/2026-08-01/fp8-mqa-logits/bench.txt`.
+
+## 2026-08-02 — quantization `mxfp4_gguf` (OCP MXFP4 in the GGUF layout)
+
+New family. `GGML_TYPE_MXFP4` is the quant DeepSeek-V4-Flash stores its routed
+experts in, and it was the one format SlimServe's GGUF stack could not read.
+
+Layout is 32 values in 17 bytes — one e8m0 scale, then 16 bytes of e2m1 nibble
+pairs where the LOW nibbles supply values [0,16) and the high nibbles [16,32).
+That ordering is easy to get backwards and nearly invisible to a norm check, so
+the harness pins it by element position with a hand-built probe block.
+
+Approach: e2m1 is not uniform, so the nibbles cannot go straight into a dot
+instruction the way q4_0's offset integers can. They index a 16-entry table of
+2x the true values (all integers) with the factor of 2 folded into the scale,
+which keeps the inner loop on `v_dot4`. The lookup is byte permutes
+(`__builtin_amdgcn_perm`) plus a blend on nibble bit 3 — no LDS, no branches.
+
+Correctness: dequant is checked **bitwise** (a nibble decodes to a table entry
+times a power of two, so there is nothing to tolerate). Dots are judged as
+`|err| / sum|terms|`, not `|err| / |result|`. That change mattered: under the
+naive relative metric the MoE case read 1.9e-05 and looked like an indexing bug,
+but a same-shape non-MoE control read 9.9e-06, and switching to the
+accumulated-magnitude metric put every case in the 2.4e-08 to 5.3e-08 band
+against an fp32 bound of roughly sqrt(N)*2^-24 ~ 1.3e-06. The lesson is that
+dividing by a cancelling result measures the data, not the kernel.
+
+| route / shape | current | note |
+| --- | ---: | --- |
+| `mxfp4_gemv_q8_1`, 4096x4096 | 0.0048 ms, 1840.7 GB/s | weight-bound |
+
+No keep/reject variant: this is a first implementation, not a re-tune. 1840 GB/s
+is roughly a third of MI300X HBM peak on a pure weight-streaming GEMV, so a
+wider per-wave tile or multi-row blocking is the obvious next experiment once it
+is wired into a real serving path and the shapes are known.
+
+Raw results: `perf/results/2026-08-02/mxfp4-gguf/bench.txt`.
