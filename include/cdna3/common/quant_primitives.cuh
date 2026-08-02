@@ -18,8 +18,9 @@
  *
  * The real split is at code 0:
  *
- *   conformant   code 0 -> 2^-127   ldexpf / ggml / the spec
- *   fast         code 0 -> +0.0     __uint_as_float(code << 23)
+ *   exact   code 0 -> 2^-127   code 255 -> NaN    the MX spec
+ *   pow2    code 0 -> 2^-127   code 255 -> +Inf   ggml and ldexpf, identically
+ *   fast    code 0 -> +0.0     code 255 -> +Inf   bit-punning the exponent
  *
  * The fast form is not a bug. The spec says an all-zero block uses scale code
  * 0 with all-zero element codes, so under the producer contract both give the
@@ -27,9 +28,9 @@
  * that violates that contract. What was wrong is that it was *named*
  * `e8m0_decode`, so a reader could not tell which one they had.
  *
- * Both forms return +Inf at code 255 where the spec says NaN. That divergence
- * is universal across the tree and is called out on each function rather than
- * silently fixed, because changing it moves behaviour for every caller.
+ * Only `exact` matches the MX spec at code 255. The other two return +Inf, and
+ * that is called out on each function rather than silently fixed, because
+ * changing it moves behaviour for every caller.
  */
 #pragma once
 #include <cstdint>
@@ -135,10 +136,13 @@ __device__ __forceinline__ float e8m0_decode_fast(uint8_t e) {
     return __uint_as_float((uint32_t)e << 23);
 }
 
-/// The GGUF/ggml spelling of the conformant decode. Identical in value to
-/// e8m0_decode_exact for 0..254; kept as a separate name only because the GGUF
-/// kernels are ports and reviewers expect to find the constant they know.
-__device__ __forceinline__ float e8m0_decode_ggml(uint8_t e) {
+/// 2^(code-127) at every code, so +Inf at 255 rather than NaN.
+///
+/// This is what ggml's bit-punning and a plain ldexpf both compute -- they are
+/// the same function, not two conventions -- so it is named for the behaviour
+/// rather than for either lineage. Required for GGUF, where matching ggml is
+/// the point; also what the MXFP8 KV-cache path uses.
+__device__ __forceinline__ float e8m0_decode_pow2(uint8_t e) {
     const uint32_t bits = (e == 0) ? 0x00400000u : ((uint32_t)e << 23);
     float r;
     __builtin_memcpy(&r, &bits, 4);

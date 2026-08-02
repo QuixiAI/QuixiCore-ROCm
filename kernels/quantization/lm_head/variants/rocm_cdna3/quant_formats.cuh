@@ -66,7 +66,7 @@ __device__ __forceinline__ float e2m3_decode(unsigned c) {
 }
 // e8m0 (MX power-of-two block scale): the byte IS a float exponent field. Two ALU ops, exact
 // (e=0 -> 2^-127 lands subnormal ~= 0; encoders never emit it for nonzero blocks).
-__device__ __forceinline__ float e8m0_decode(uint8_t e) {
+__device__ __forceinline__ float e8m0_decode_fast(uint8_t e) {
     return __uint_as_float(uint32_t(e) << 23);
 }
 __device__ __forceinline__ float half_at(const uint8_t* p, int idx = 0) {
@@ -121,7 +121,7 @@ __host__ __forceinline__ float e4m3_decode_host(uint8_t v) {
 
 // float -> UE8M0 byte = the fp32 exponent field of max(value,0) (MetalForge
 // float_to_ue8m0: raw exponent extraction, NOT round-to-nearest). Exact
-// inverse of e8m0_decode for the powers of two it produces.
+// inverse of e8m0_decode_fast for the powers of two it produces.
 __host__ __device__ __forceinline__ uint8_t e8m0_encode(float value) {
     const float v = fmaxf(value, 0.0f);
     uint32_t bits;
@@ -293,7 +293,7 @@ struct fp4_e2m1 {
 struct mxfp8 {
     static constexpr int block_k = 32, block_bytes = 33;
     __device__ static float dequant(const uint8_t* base, int col) {
-        return e8m0_decode(base[0]) * e4m3_decode(base[1 + col]);
+        return e8m0_decode_fast(base[0]) * e4m3_decode(base[1 + col]);
     }
 };
 
@@ -315,7 +315,7 @@ struct mxfp4 {
     __device__ static float dequant(const uint8_t* base, int col) {
         const uint8_t* qs = base + 1;
         const unsigned nib = (col < 16) ? (qs[col] & 0x0F) : (qs[col - 16] >> 4);
-        return e8m0_decode(base[0]) * e2m1_decode(nib);
+        return e8m0_decode_fast(base[0]) * e2m1_decode(nib);
     }
 };
 
@@ -329,7 +329,7 @@ struct mxfp6 {
         const uint8_t* p = base + 1 + 3 * g;
         const unsigned val = unsigned(p[0]) | (unsigned(p[1]) << 8) | (unsigned(p[2]) << 16);
         const unsigned c = (val >> (6 * within)) & 0x3F;
-        return e8m0_decode(base[0]) * (E3M2 ? e3m2_decode(c) : e2m3_decode(c));
+        return e8m0_decode_fast(base[0]) * (E3M2 ? e3m2_decode(c) : e2m3_decode(c));
     }
 };
 using mxfp6_e3m2 = mxfp6<true>;
@@ -393,13 +393,13 @@ __device__ __forceinline__ void dequant8<q4_0>(const uint8_t* base, int col0, fl
 }
 template<>
 __device__ __forceinline__ void dequant8<mxfp8>(const uint8_t* base, int col0, float w[8]) {
-    const float s = e8m0_decode(base[0]);
+    const float s = e8m0_decode_fast(base[0]);
     #pragma unroll
     for (int i = 0; i < 8; i++) w[i] = s * e4m3_decode(base[1 + col0 + i]);
 }
 template<>
 __device__ __forceinline__ void dequant8<mxfp4>(const uint8_t* base, int col0, float w[8]) {
-    const float s = e8m0_decode(base[0]);
+    const float s = e8m0_decode_fast(base[0]);
     const uint8_t* qs = base + 1;
     const int sh = (col0 < 16) ? 0 : 4;
     const int qo = (col0 < 16) ? col0 : col0 - 16;
@@ -426,7 +426,7 @@ __device__ __forceinline__ void dequant8<fp4_e2m1>(const uint8_t* base, int col0
 }
 template<>
 __device__ __forceinline__ void dequant8<mxfp6<true>>(const uint8_t* base, int col0, float w[8]) {
-    const float s = e8m0_decode(base[0]);
+    const float s = e8m0_decode_fast(base[0]);
     #pragma unroll
     for (int g = 0; g < 2; g++) {                        // 8 cols = two 24-bit groups
         const uint8_t* p = base + 1 + 3 * ((col0 >> 2) + g);
@@ -437,7 +437,7 @@ __device__ __forceinline__ void dequant8<mxfp6<true>>(const uint8_t* base, int c
 }
 template<>
 __device__ __forceinline__ void dequant8<mxfp6<false>>(const uint8_t* base, int col0, float w[8]) {
-    const float s = e8m0_decode(base[0]);
+    const float s = e8m0_decode_fast(base[0]);
     #pragma unroll
     for (int g = 0; g < 2; g++) {
         const uint8_t* p = base + 1 + 3 * ((col0 >> 2) + g);

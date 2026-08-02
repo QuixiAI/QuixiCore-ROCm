@@ -43,7 +43,7 @@ __global__ void run_e8m0(const uint8_t* codes, int n, float* exact,
     if (i >= n) return;
     exact[i] = e8m0_decode_exact(codes[i]);
     fast[i] = e8m0_decode_fast(codes[i]);
-    ggml[i] = e8m0_decode_ggml(codes[i]);
+    ggml[i] = e8m0_decode_pow2(codes[i]);
 }
 
 static uint32_t as_bits(float f) {
@@ -161,7 +161,7 @@ int main(int argc, char** argv) {
 
     printf("\n  e8m0_decode_exact : %s (%d/%d)\n",
            exact_bad ? "FAIL" : "conformant", n - exact_bad, n);
-    printf("  e8m0_decode_ggml  : %s vs e8m0_gguf.json (%d/%d)\n",
+    printf("  e8m0_decode_pow2  : %s vs e8m0_gguf.json (%d/%d)\n",
            ggml_bad ? "FAIL" : "conformant", n - ggml_bad, n);
     printf("  e8m0_decode_fast  : diverges at %d/%d codes, as documented\n",
            fast_div, n);

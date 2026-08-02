@@ -119,7 +119,7 @@ __global__ void k_mx_paged_attention(const float *__restrict__ q,
             for (int g = 0; g < groups; ++g) {
                 const float summed = wave_sum((float)partial[g]);
                 const long long base = mx_group_base(row, kvhead, g, kv_heads, groups);
-                dot += (double)e8m0_decode(key_cache[base]) * (double)summed;
+                dot += (double)e8m0_decode_pow2(key_cache[base]) * (double)summed;
             }
             if (lane == 0) {
                 s_scores[idx] = (float)(dot * score_scale);
@@ -148,7 +148,7 @@ __global__ void k_mx_paged_attention(const float *__restrict__ q,
                 const int d = lane + r * 64;
                 const int g = d / kMxGroup;
                 const long long base = mx_group_base(row, kvhead, g, kv_heads, groups);
-                const float scaled_weight = (float)(weight * (double)e8m0_decode(value_cache[base]));
+                const float scaled_weight = (float)(weight * (double)e8m0_decode_pow2(value_cache[base]));
                 acc[r] += scaled_weight * e4m3fn_decode(value_cache[base + 1 + (d % kMxGroup)]);
             }
         }
@@ -254,7 +254,7 @@ int main() {
                         for (int d = 0; d < kMxGroup; ++d)
                             gd += (double)q[(size_t)item*head_dim + g*kMxGroup + d] *
                                   (double)e4m3fn_decode(kc[base+1+d]);
-                        dot += (double)e8m0_decode(kc[base]) * gd;
+                        dot += (double)e8m0_decode_pow2(kc[base]) * gd;
                     }
                     sc.push_back((float)(dot*score_scale)); rws.push_back(row);
                     tmax = std::max(tmax, sc.back());
@@ -268,7 +268,7 @@ int main() {
                     denominator += w;
                     for (int g = 0; g < groups; ++g) {
                         const long long base = mx_group_base(rws[k], kvhead, g, kv_heads, groups);
-                        const float sw = (float)(w * (double)e8m0_decode(vc[base]));
+                        const float sw = (float)(w * (double)e8m0_decode_pow2(vc[base]));
                         for (int d = 0; d < kMxGroup; ++d)
                             output[g*kMxGroup+d] += sw * e4m3fn_decode(vc[base+1+d]);
                     }

@@ -19,21 +19,10 @@ cd "$(dirname "$0")/.."
 
 fail=0
 
-# Families not yet migrated, with the E8M0 convention each currently uses.
-# ieee = code 0 -> +0.0 ; ldexp = code 0 -> 2^-127
-ALLOW='kernels/quantization/qgemm/variants/rocm_cdna3/quant_formats.cuh
-kernels/quantization/qgemv/variants/rocm_cdna3/quant_formats.cuh
-kernels/quantization/lm_head/variants/rocm_cdna3/quant_formats.cuh
-kernels/quantization/turboquant/variants/rocm_cdna3/quant_formats.cuh
-kernels/quantization/followups/variants/rocm_cdna3/quant_formats.cuh
-kernels/serving/variants/rocm_cdna3/quant_formats.cuh
-kernels/serving/kv_cache_mxfp8/variants/rocm_cdna3/mxfp8_common.cuh
-kernels/moe/variants/rocm_cdna3_quant/quant_formats.cuh
-kernels/quantization/quant_authoring/variants/rocm_cdna3/quant_authoring.cu
-kernels/quantization/turboquant/variants/rocm_cdna3/mf_primitives_test.cu
-kernels/serving/kv_cache_mxfp8/variants/rocm_cdna3/kv_cache_mxfp8.cu
-kernels/serving/kv_cache_mxfp8/variants/rocm_cdna3/paged_attention_mxfp8.cu
-kernels/moe/variants/rocm_cdna3_quant/tm_moe_quant_kernels.cuh'
+# Empty: every family now names the E8M0 convention it uses. Re-populating
+# this is a decision, not a convenience -- an entry here means a file is
+# allowed to hide which behaviour it implements.
+ALLOW=''
 
 allowed() { grep -qxF "$1" <<<"$ALLOW"; }
 

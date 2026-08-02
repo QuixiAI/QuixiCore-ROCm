@@ -55,7 +55,7 @@ __global__ void dequant_mxfp4(const void* __restrict__ vx, dst_t* __restrict__ y
     const long b = (long)blockIdx.x * blockDim.x + threadIdx.x;
     if (b >= nblocks) return;
     const block_mxfp4* x = (const block_mxfp4*)vx + b;
-    const float d = quixicore::quant::e8m0_decode_ggml(x->e) * 0.5f;
+    const float d = quixicore::quant::e8m0_decode_pow2(x->e) * 0.5f;
     dst_t* out = y + b * QK_MXFP4;
 #pragma unroll
     for (int j = 0; j < QK_MXFP4 / 2; ++j) {
@@ -77,7 +77,7 @@ __device__ __forceinline__ float vec_dot_mxfp4_q8_1(const block_mxfp4* bq,
         sumi = quixicore::quant::dp4a(vx, u[l + 0], sumi);
         sumi = quixicore::quant::dp4a(vy, u[l + 4], sumi);
     }
-    return quixicore::quant::e8m0_decode_ggml(bq->e) * 0.5f * d8 * (float)sumi;
+    return quixicore::quant::e8m0_decode_pow2(bq->e) * 0.5f * d8 * (float)sumi;
 }
 
 // ----------------------------------------------------------------- GEMV/MoE

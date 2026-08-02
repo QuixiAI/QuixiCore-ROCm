@@ -35,7 +35,7 @@ __global__ void fp4_roundtrip(const float* in, float* deq_out, uint8_t* code_out
 __global__ void e8m0_roundtrip(const float* in, float* deq_out, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
-    deq_out[i] = e8m0_decode(e8m0_encode(in[i]));
+    deq_out[i] = e8m0_decode_fast(e8m0_encode(in[i]));
 }
 // ---- warp_min + block inclusive scan ----
 __global__ void warpmin_k(const float* in, float* out) {

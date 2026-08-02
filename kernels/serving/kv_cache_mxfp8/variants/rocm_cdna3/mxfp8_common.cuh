@@ -19,7 +19,7 @@ constexpr int kMxBlockBytes = 33;  // 1 scale byte + 32 code bytes
 constexpr float kE4M3FnMax = 448.0f;
 
 // ---- E8M0: value = 2^(code-127); 255 is NaN. Encode rounds the exponent UP. --
-__host__ __device__ __forceinline__ float e8m0_decode(uint8_t code) {
+__host__ __device__ __forceinline__ float e8m0_decode_pow2(uint8_t code) {
     return ldexpf(1.0f, (int)code - 127);
 }
 __host__ __device__ __forceinline__ uint8_t e8m0_encode_up(float requested) {

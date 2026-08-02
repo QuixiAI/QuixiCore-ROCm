@@ -23,7 +23,7 @@
  * ## Quantization rule (bit-exact, not approximate)
  *
  *   scale_code = e8m0_encode_up(amax(group) / 448.0f)
- *   inverse    = amax > 0 ? 1 / e8m0_decode(scale_code) : 0
+ *   inverse    = amax > 0 ? 1 / e8m0_decode_pow2(scale_code) : 0
  *   code       = e4m3fn_encode(v * inverse)
  *
  * Three details that a reasonable-looking implementation gets wrong:
@@ -105,8 +105,8 @@ __global__ void k_mx_scatter(const float *__restrict__ key,
         key_cache[dst] = key_scale;
         value_cache[dst] = value_scale;
 
-        const float key_inv = key_max > 0.0f ? 1.0f / e8m0_decode(key_scale) : 0.0f;
-        const float value_inv = value_max > 0.0f ? 1.0f / e8m0_decode(value_scale) : 0.0f;
+        const float key_inv = key_max > 0.0f ? 1.0f / e8m0_decode_pow2(key_scale) : 0.0f;
+        const float value_inv = value_max > 0.0f ? 1.0f / e8m0_decode_pow2(value_scale) : 0.0f;
         for (int i = 0; i < kMxGroup; ++i) {
             key_cache[dst + 1 + i] = e4m3fn_encode(key[source + g0 + i] * key_inv);
             value_cache[dst + 1 + i] = e4m3fn_encode(value[source + g0 + i] * value_inv);
@@ -136,8 +136,8 @@ __global__ void k_mx_gather(const uint8_t *__restrict__ key_cache,
     for (int group = lane; group < groups; group += LANES) {
         const long long g0 = (long long)group * kMxGroup;
         const long long src = mx_group_base(slot, head, group, heads, groups);
-        const float key_scale = e8m0_decode(key_cache[src]);
-        const float value_scale = e8m0_decode(value_cache[src]);
+        const float key_scale = e8m0_decode_pow2(key_cache[src]);
+        const float value_scale = e8m0_decode_pow2(value_cache[src]);
         for (int i = 0; i < kMxGroup; ++i) {
             key_out[dest + g0 + i] = e4m3fn_decode(key_cache[src + 1 + i]) * key_scale;
             value_out[dest + g0 + i] = e4m3fn_decode(value_cache[src + 1 + i]) * value_scale;
@@ -244,8 +244,8 @@ int main() {
                 const uint8_t ks = e8m0_encode_up(km / kE4M3FnMax);
                 const uint8_t vs = e8m0_encode_up(vm / kE4M3FnMax);
                 kc_ref[dst] = ks; vc_ref[dst] = vs;
-                const float ki = km > 0.f ? 1.f / e8m0_decode(ks) : 0.f;
-                const float vi = vm > 0.f ? 1.f / e8m0_decode(vs) : 0.f;
+                const float ki = km > 0.f ? 1.f / e8m0_decode_pow2(ks) : 0.f;
+                const float vi = vm > 0.f ? 1.f / e8m0_decode_pow2(vs) : 0.f;
                 for (int i = 0; i < kMxGroup; ++i) {
                     kc_ref[dst + 1 + i] = e4m3fn_encode(key[src + i] * ki);
                     vc_ref[dst + 1 + i] = e4m3fn_encode(value[src + i] * vi);
@@ -313,7 +313,7 @@ int main() {
         for (int h = 0; h < heads; ++h)
             for (int g = 0; g < groups; ++g) {
                 const size_t base = mx_group_base(indices[t], h, g, heads, groups);
-                const float ks = e8m0_decode(kc_ref[base]);
+                const float ks = e8m0_decode_pow2(kc_ref[base]);
                 for (int i = 0; i < kMxGroup; ++i) {
                     const float want = e4m3fn_decode(kc_ref[base + 1 + i]) * ks;
                     const size_t o = ((size_t)t * heads + h) * head_dim + (size_t)g * kMxGroup + i;

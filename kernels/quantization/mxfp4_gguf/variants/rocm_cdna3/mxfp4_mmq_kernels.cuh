@@ -105,7 +105,7 @@ __global__ void __launch_bounds__(MMQ_WARP* NWARPS, 2)
             const block_mxfp4* bxi =
                 x + (row_x_0 + i) * blocks_per_row_x + ib0 + kbxd;
             tile_x_d[i * SCALES_PER_ROW + i / QI_MXFP4 + kbxd] =
-                quixicore::quant::e8m0_decode_ggml(bxi->e) * 0.5f;
+                quixicore::quant::e8m0_decode_pow2(bxi->e) * 0.5f;
         }
 
         // Two spans: the low nibbles of the tile pair with the first half of

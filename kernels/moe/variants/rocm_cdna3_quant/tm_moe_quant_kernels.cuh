@@ -428,7 +428,7 @@ __global__ void per_token_group_quant_fp8(uint8_t* __restrict__ out, float* __re
         amax = fmaxf(amax, fabsf(float(row[c])));
     amax = tms::warp_max_f(fmaxf(amax, eps));
     float scale = amax / 448.0f;
-    if (UE8M0) scale = e8m0_decode(e8m0_encode(scale));    // round to power of two
+    if (UE8M0) scale = e8m0_decode_fast(e8m0_encode(scale));    // round to power of two
     const float inv = scale > 0.0f ? 1.0f / scale : 0.0f;
     if (lane == 0) scales[(long)token * n_groups + g] = scale;
     for (int c = c0 + lane; c < c0 + group_size && c < hidden; c += 32)
