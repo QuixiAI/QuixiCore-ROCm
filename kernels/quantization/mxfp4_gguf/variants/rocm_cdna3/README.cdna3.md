@@ -44,6 +44,32 @@ CDNA idiom; llama.cpp uses the same instruction for its HIP path.
   pass `expert_ids` and a row stride and each token indexes its own expert, with
   a negative id zeroing the row (the padded-row convention the GGUF MoE path
   uses).
+- `mxfp4_mmq_q8_1<MMQ_X, MMQ_Y, NWARPS, NEED_CHECK>` — the tiled GEMM, in
+  `mxfp4_mmq_kernels.cuh`.
+
+## GEMV or tile?
+
+Both, and the caller picks. The GEMV reloads the weight row for every output
+column, so its cost is linear in columns while the tile kernel's is flat.
+Measured on MI300X at DeepSeek-V4-Flash expert shapes (4096 -> 2048, 32
+experts, top-6), tile speedup over GEMV:
+
+| routed tokens | 1 | 8 | 32 | 128 | 512 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| MMQ vs GEMV | 0.17x | 0.42x | 1.52x | 2.18x | 2.43x |
+
+So the crossover is between 8 and 32 tokens, and shipping only one of the two
+kernels is wrong at one end or the other. Neither is a fallback for the other.
+
+MXFP4's block constants (QK 32 / QR 2 / QI 4) are identical to q4_0's, so the
+tile geometry is the classic ggml q4_0 MMQ layout with no index changes at all
+— only the e8m0 scale and the table lookup differ, and dropping q4_0's
+activation-sum correction term, which MXFP4 has no offset to need.
+
+The 17-byte block is the hazard worth naming: `qs` is at an odd offset and
+blocks are 17 apart, so nothing in the weight stream is 4-byte aligned. Reads
+of the quants must be `memcpy`, never a cast — the usual `get_int_from_uint8`
+helper assumes 2-byte alignment and is not safe here.
 
 ## Correctness
 
@@ -54,7 +80,20 @@ dividing by a cancelling result makes the metric explode on rows that happen to
 cancel, which says nothing about the kernel. Measured 2.4e-08 to 5.3e-08 against
 an fp32 bound of roughly `sqrt(N) * 2^-24` ≈ 1.3e-06.
 
+The tile kernel is checked the same way and lands at 7.2e-08 to 8.3e-08,
+including the two ragged cases (rows not a multiple of `MMQ_Y`, columns not a
+multiple of `MMQ_X`) where the tile reads past the live region and has to drop
+the result at write-back rather than in the inner loop.
+
+Its activations are quantized on the **host** and handed over already in q8_1
+form. Letting a device quantizer intervene would fold that kernel's rounding
+into the result and could mask an error here. Two details of q8_1 have to be
+mirrored exactly or the reference drifts far enough to hide real bugs: the
+quants are formed with the **fp32** scale while the stored and later-applied
+scale is **fp16**, and `roundf` breaks ties away from zero where most
+round-to-nearest implementations break them to even.
+
 ```bash
-make test    # dequant (bitwise), ordering probe, gemv, MoE gemv
+make test    # dequant (bitwise), ordering probe, gemv, MoE gemv, tiled GEMM
 make bench
 ```
