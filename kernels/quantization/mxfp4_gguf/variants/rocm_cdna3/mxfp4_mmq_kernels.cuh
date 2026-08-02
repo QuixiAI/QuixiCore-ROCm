@@ -105,7 +105,7 @@ __global__ void __launch_bounds__(MMQ_WARP* NWARPS, 2)
             const block_mxfp4* bxi =
                 x + (row_x_0 + i) * blocks_per_row_x + ib0 + kbxd;
             tile_x_d[i * SCALES_PER_ROW + i / QI_MXFP4 + kbxd] =
-                e8m0_to_fp32(bxi->e) * 0.5f;
+                quixicore::quant::e8m0_decode_ggml(bxi->e) * 0.5f;
         }
 
         // Two spans: the low nibbles of the tile pair with the first half of
@@ -161,16 +161,16 @@ __global__ void __launch_bounds__(MMQ_WARP* NWARPS, 2)
                             table_lookup_16(
                                 tile_x_qs[ii * (MMQ_WARP + 1) + k + l], vlo,
                                 vhi);
-                            sumi = __builtin_amdgcn_sdot4(
+                            sumi = quixicore::quant::dp4a(
                                 vlo,
                                 tile_y_qs[jj * MMQ_WARP +
                                           (kyqs + l) % MMQ_WARP],
-                                sumi, false);
-                            sumi = __builtin_amdgcn_sdot4(
+                                sumi);
+                            sumi = quixicore::quant::dp4a(
                                 vhi,
                                 tile_y_qs[jj * MMQ_WARP +
                                           (kyqs + l + QI_MXFP4) % MMQ_WARP],
-                                sumi, false);
+                                sumi);
                         }
                         sum[i / MMQ_WARP][j / NWARPS] +=
                             tile_x_d[ii * SCALES_PER_ROW + ii / QI_MXFP4 +

@@ -40,12 +40,17 @@
 
 #include <cstdint>
 
+#include "quant_primitives.cuh"
 #include "quant_tables.cuh"
 
 namespace qciq2 {
 
 using tmq::iq2xxs_grid;
 using tmq::ksigns_iq2xs;
+
+using quixicore::quant::apply_sign_bits4;
+using quixicore::quant::dp4a;
+using quixicore::quant::load_int_unaligned;
 
 #define QK_K_IQ2 256
 #define QK8_1_IQ2 32
@@ -67,23 +72,6 @@ typedef struct {
 #define IQ2_TILE_GROUPS (IQ2_SB_PER_ITER * 8)            // 16 groups of 32
 #define IQ2_WARP 32
 
-// CUDA's byte-wise SIMD helpers have no HIP equivalent, so define them the way
-// ggml's ROCm path does. Both are used only for the sign application below.
-__device__ __forceinline__ uint32_t vcmpeq4(uint32_t a, uint32_t b) {
-    const uint32_t neq = a ^ b;
-    return !(neq & 0xff000000) * 0xff000000 | !(neq & 0x00ff0000) * 0x00ff0000 |
-           !(neq & 0x0000ff00) * 0x0000ff00 | !(neq & 0x000000ff) * 0x000000ff;
-}
-
-/// Per-byte subtract; a plain 32-bit subtract would propagate borrows across
-/// byte lanes and corrupt the neighbouring weights.
-__device__ __forceinline__ uint32_t vsub4(uint32_t a, uint32_t b) {
-    return ((uint32_t)(uint8_t)(((a >> 24) & 0xff) - ((b >> 24) & 0xff)) << 24) |
-           ((uint32_t)(uint8_t)(((a >> 16) & 0xff) - ((b >> 16) & 0xff)) << 16) |
-           ((uint32_t)(uint8_t)(((a >> 8) & 0xff) - ((b >> 8) & 0xff)) << 8) |
-           ((uint32_t)(uint8_t)((a & 0xff) - (b & 0xff)));
-}
-
 /**
  * @brief Decode one 32-weight group to eight ints of signed bytes.
  *
@@ -98,12 +86,8 @@ __device__ __forceinline__ void iq2xxs_decode_group(uint32_t aux_g,
     for (int e = 0; e < 4; ++e) {
         const uint32_t* grid = (const uint32_t*)(iq2xxs_grid + aux8[e]);
         const uint8_t signs = ksigns_iq2xs[(aux_s >> (7 * e)) & 127];
-        const uint32_t s0 =
-            vcmpeq4(((signs & 0xf) * 0x01010101) & 0x08040201, 0x08040201);
-        const uint32_t s1 =
-            vcmpeq4(((signs >> 4) * 0x01010101) & 0x08040201, 0x08040201);
-        out[2 * e + 0] = vsub4(grid[0] ^ s0, s0);
-        out[2 * e + 1] = vsub4(grid[1] ^ s1, s1);
+        out[2 * e + 0] = (int)apply_sign_bits4(grid[0], signs & 0xf);
+        out[2 * e + 1] = (int)apply_sign_bits4(grid[1], signs >> 4);
     }
 }
 
@@ -234,10 +218,9 @@ __global__ void __launch_bounds__(IQ2_WARP* NWARPS, 2)
                     int sumi = 0;
 #pragma unroll
                     for (int l = 0; l < 8; ++l)
-                        sumi = __builtin_amdgcn_sdot4(
+                        sumi = dp4a(
                             tile_x_qs[ii * (IQ2_TILE_INTS + 1) + g * 8 + l],
-                            tile_y_qs[jj * IQ2_TILE_INTS + g * 8 + l], sumi,
-                            false);
+                            tile_y_qs[jj * IQ2_TILE_INTS + g * 8 + l], sumi);
                     sum[i / IQ2_WARP][j / NWARPS] +=
                         tile_x_d[ii * IQ2_TILE_GROUPS + g] * d8 * (float)sumi;
                 }

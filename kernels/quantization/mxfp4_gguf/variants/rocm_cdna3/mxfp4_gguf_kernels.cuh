@@ -25,6 +25,8 @@
 #pragma once
 #include <cstdint>
 
+#include "quant_primitives.cuh"
+
 namespace qcmxfp4 {
 
 #define QK_MXFP4 32
@@ -39,37 +41,11 @@ static_assert(sizeof(block_mxfp4) == 17, "mxfp4 block must be 17 bytes");
 __device__ __constant__ static const int8_t kvalues_mxfp4[16] = {
     0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12};
 
-// E8M0: the byte IS the fp32 exponent field. 0 means the smallest normal here,
-// matching ggml, not zero.
-__device__ __forceinline__ float e8m0_to_fp32(uint8_t x) {
-    const uint32_t bits = (x == 0) ? 0x00400000u : ((uint32_t)x << 23);
-    float r;
-    __builtin_memcpy(&r, &bits, 4);
-    return r;
-}
-
-__device__ __forceinline__ int get_int_b1(const uint8_t* x, int i32) {
-    int v;
-    __builtin_memcpy(&v, x + sizeof(int) * i32, sizeof(int));
-    return v;
-}
-
-// Map 8 packed nibbles to two int32s of 4 signed bytes each, by byte permute.
-// `x` takes the low nibbles of the four bytes, `y` the high nibbles. Bit 3 of a
-// nibble selects the upper half of the table, so both halves are permuted and
-// blended on that bit rather than branching.
+// The e2m1 table as four uint32, for the byte-permute lookup in
+// quixicore::quant::table_lookup_16.
 __device__ __forceinline__ void table_lookup_16(int q4, int& x, int& y) {
-    const uint32_t* t = reinterpret_cast<const uint32_t*>(kvalues_mxfp4);
-    const uint32_t lo = (uint32_t)q4;
-    const uint32_t hi = ((uint32_t)q4 >> 4);
-    const uint32_t lo_l = __builtin_amdgcn_perm(t[1], t[0], lo & 0x07070707u);
-    const uint32_t lo_h = __builtin_amdgcn_perm(t[3], t[2], lo & 0x07070707u);
-    const uint32_t hi_l = __builtin_amdgcn_perm(t[1], t[0], hi & 0x07070707u);
-    const uint32_t hi_h = __builtin_amdgcn_perm(t[3], t[2], hi & 0x07070707u);
-    const uint32_t lo_sel = ((lo >> 3) & 0x01010101u) * 0xFFu;
-    const uint32_t hi_sel = ((hi >> 3) & 0x01010101u) * 0xFFu;
-    x = (int)((lo_l & ~lo_sel) | (lo_h & lo_sel));
-    y = (int)((hi_l & ~hi_sel) | (hi_h & hi_sel));
+    quixicore::quant::table_lookup_16(
+        reinterpret_cast<const uint32_t*>(kvalues_mxfp4), q4, x, y);
 }
 
 // --------------------------------------------------------------- dequantize
@@ -79,7 +55,7 @@ __global__ void dequant_mxfp4(const void* __restrict__ vx, dst_t* __restrict__ y
     const long b = (long)blockIdx.x * blockDim.x + threadIdx.x;
     if (b >= nblocks) return;
     const block_mxfp4* x = (const block_mxfp4*)vx + b;
-    const float d = e8m0_to_fp32(x->e) * 0.5f;
+    const float d = quixicore::quant::e8m0_decode_ggml(x->e) * 0.5f;
     dst_t* out = y + b * QK_MXFP4;
 #pragma unroll
     for (int j = 0; j < QK_MXFP4 / 2; ++j) {
@@ -97,11 +73,11 @@ __device__ __forceinline__ float vec_dot_mxfp4_q8_1(const block_mxfp4* bq,
 #pragma unroll
     for (int l = 0; l < 4; ++l) {
         int vx, vy;
-        table_lookup_16(get_int_b1(bq->qs, l), vx, vy);
-        sumi = __builtin_amdgcn_sdot4(vx, u[l + 0], sumi, false);
-        sumi = __builtin_amdgcn_sdot4(vy, u[l + 4], sumi, false);
+        table_lookup_16(quixicore::quant::load_int_unaligned(bq->qs, l), vx, vy);
+        sumi = quixicore::quant::dp4a(vx, u[l + 0], sumi);
+        sumi = quixicore::quant::dp4a(vy, u[l + 4], sumi);
     }
-    return e8m0_to_fp32(bq->e) * 0.5f * d8 * (float)sumi;
+    return quixicore::quant::e8m0_decode_ggml(bq->e) * 0.5f * d8 * (float)sumi;
 }
 
 // ----------------------------------------------------------------- GEMV/MoE

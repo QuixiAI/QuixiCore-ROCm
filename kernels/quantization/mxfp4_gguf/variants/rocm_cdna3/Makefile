@@ -3,7 +3,11 @@
 GPU_TARGET ?= CDNA3
 OFFLOAD_ARCH ?= gfx942
 HIPCC ?= /opt/rocm/bin/hipcc
-HIPFLAGS ?= -std=c++17 -O3 --offload-arch=$(OFFLOAD_ARCH) -Wno-unused-value
+# Shared primitives (byte SIMD, e8m0 conventions) live once, in the common
+# include tree, rather than being vendored per family.
+QC_INCLUDE ?= ../../../../../include/cdna3/common
+HIPFLAGS ?= -std=c++17 -O3 --offload-arch=$(OFFLOAD_ARCH) -Wno-unused-value \
+            -I$(QC_INCLUDE)
 
 all: mxfp4_gguf_test.out mxfp4_mmq_test.out
 
