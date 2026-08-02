@@ -1,0 +1,24 @@
+name: Contracts
+
+# Static checks that need no GPU. The kernel and conformance suites do need
+# one, so they stay a local `make test` until there is a runner with an
+# MI300X -- this deliberately does not pretend to cover them.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  primitives:
+    name: quant primitives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Rejects a kernel that redefines a primitive the common header owns, and
+      # any bare e8m0_decode. The second matters because the conformant and
+      # fast forms differ at code 0 and 255, and an unqualified name is how the
+      # fast one passed for the conformant one across seven families.
+      - name: No re-privatised primitives
+        run: ./scripts/check_quant_primitives.sh
