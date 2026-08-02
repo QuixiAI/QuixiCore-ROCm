@@ -10,21 +10,26 @@
  * depending on ggml's `ggml-common.h` to compile a kernel that is otherwise
  * self-contained. These are that dependency removed.
  *
- * **E8M0 block-scale decode.** This one is not mere duplication. The tree holds
- * three DIFFERENT behaviours under two names, and they agree everywhere except
- * at code 0:
+ * **E8M0 block-scale decode.** specs/formats/mx-formats.md is the authority:
+ * codes 0..254 decode to 2^(code-127), code 255 is NaN, and the format has no
+ * zero. Measured against that, the tree had two behaviours, not the three an
+ * earlier version of this header claimed -- ggml's 0x00400000 constant IS
+ * 2^-127, the same value ldexpf gives, so those agree.
  *
- *   | convention | code 0 decodes to | who wants it                        |
- *   | ---------- | ----------------- | ----------------------------------- |
- *   | ieee       | +0.0              | quant_formats.cuh (qgemm/qgemv/...) |
- *   | ldexp      | 2^-127            | serving/kv_cache_mxfp8              |
- *   | ggml       | 2^-126 (min norm) | the GGUF families                   |
+ * The real split is at code 0:
  *
- * For every other code all three agree on 2^(code-127). Collapsing them into
- * one `e8m0_decode` would silently move numerics in whichever callers lost the
- * argument, so there deliberately is no such function here: a caller has to
- * name the convention it means. The OCP MX spec leaves code 0 to the format
- * that embeds it, which is why the formats disagree in the first place.
+ *   conformant   code 0 -> 2^-127   ldexpf / ggml / the spec
+ *   fast         code 0 -> +0.0     __uint_as_float(code << 23)
+ *
+ * The fast form is not a bug. The spec says an all-zero block uses scale code
+ * 0 with all-zero element codes, so under the producer contract both give the
+ * same product and the fast form is two ALU ops. It is only wrong for input
+ * that violates that contract. What was wrong is that it was *named*
+ * `e8m0_decode`, so a reader could not tell which one they had.
+ *
+ * Both forms return +Inf at code 255 where the spec says NaN. That divergence
+ * is universal across the tree and is called out on each function rather than
+ * silently fixed, because changing it moves behaviour for every caller.
  */
 #pragma once
 #include <cstdint>
@@ -108,22 +113,31 @@ __device__ __forceinline__ void table_lookup_16(const uint32_t* table, int packe
 
 // -------------------------------------------------------- E8M0 scale decode
 //
-// Deliberately no bare `e8m0_decode`: see the file header. Pick the convention
-// the format you are decoding actually specifies.
+// Deliberately no bare `e8m0_decode`: the conformant and fast forms differ at
+// code 0, and a caller has to say which contract it is relying on.
 
-/// The byte IS the fp32 exponent field. Code 0 gives +0.0. Two ALU ops.
-__device__ __forceinline__ float e8m0_decode_ieee(uint8_t e) {
-    return __uint_as_float((uint32_t)e << 23);
-}
-
-/// value = 2^(code-127) throughout, so code 0 gives the subnormal 2^-127.
-__device__ __forceinline__ float e8m0_decode_ldexp(uint8_t e) {
+/// Spec-conformant decode: 2^(code-127) for 0..254, NaN for 255.
+/// Use this unless you can point at the producer contract that makes the fast
+/// form safe.
+__device__ __forceinline__ float e8m0_decode_exact(uint8_t e) {
+    if (e == 255) return __builtin_nanf("");
     return ldexpf(1.0f, (int)e - 127);
 }
 
-/// ggml/GGUF convention: code 0 is the smallest NORMAL, not zero and not a
-/// subnormal. Used by the MXFP4 and imatrix GGUF paths, where treating it as
-/// zero would silently drop a block.
+/// Two-ALU-op decode: the byte IS the fp32 exponent field.
+///
+/// Differs from the spec at both ends: code 0 gives +0.0 rather than 2^-127,
+/// and code 255 gives +Inf rather than NaN. Safe wherever the producer
+/// contract in mx-formats.md holds -- an all-zero block carries scale code 0
+/// and all-zero elements, so the product is 0 either way -- which is what
+/// QuixiCore's own packers emit.
+__device__ __forceinline__ float e8m0_decode_fast(uint8_t e) {
+    return __uint_as_float((uint32_t)e << 23);
+}
+
+/// The GGUF/ggml spelling of the conformant decode. Identical in value to
+/// e8m0_decode_exact for 0..254; kept as a separate name only because the GGUF
+/// kernels are ports and reviewers expect to find the constant they know.
 __device__ __forceinline__ float e8m0_decode_ggml(uint8_t e) {
     const uint32_t bits = (e == 0) ? 0x00400000u : ((uint32_t)e << 23);
     float r;
