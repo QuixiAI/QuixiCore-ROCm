@@ -261,63 +261,10 @@ provenance review.
 
 ## 7. Established Findings — Do Not Re-Derive
 
-Distilled from `perf/optimization_status.md`. Treat as current truth until
-re-measured; each entry names the date so it can be challenged with new data.
-
-### Wins
-
-| finding | effect | date |
-|---|---|---|
-| Row-kernel 64-lane widening | +15–61% GB/s (table in §3) | 2026-07-07 |
-| Attention forward MFMA-tiling | **13–16x** | 2026-07-07 |
-| `qgemm` wide N-tile (X-reuse) | +47–54% at M≥256 | 2026-07-07 |
-| LDS-staged k-quant tile decode (span fill) | 1.4–2.0x on ctaLDS | 2026-07-26 |
-| In-GEMM k-quant decode (dequant4 MFMA fragment) | landed | 2026-07-26 |
-
-Flat elementwise reference points (n = 64 Mi): `gelu_fwd` 2577 GB/s,
-`add_ew` 3699 GB/s. Row kernels peak ~3070 GB/s. Against a 5.3 TB/s roofline
-these are 49–70% — reasonable for read+write streaming, and the bar a new
-elementwise kernel must clear.
-
-### Rejected — with the reason, so they are not retried
-
-**`flux` GEMM LDS-B staging — REJECTED.** Staging a 16×16 B tile through LDS to
-fix uncoalesced column-strided loads gave +16% at 2048³ but **−6% at 4096³**
-(per-k-step barriers stop amortizing at large K). The decisive observation:
-*both* kernels sit at 35–45 TFLOP/s against ~1300 peak, because the structural
-limiter is the 16×16 output tile, not the B load. **Lesson: find the structural
-limiter before optimizing memory access.** A 3% load-path win is noise when you
-are at 3% of peak.
-
-**`qgemm` LDS-staged wide tile — REJECTED.** Bit-identical, but slower than the
-existing register-fragment wide kernel. Kept in `qgemm_bench.cu` as a comparator
-only.
-
-**Chunked-RCCL compute/comm overlap — REJECTED.** Chunking along N with async
-per-chunk collectives measured **0.82–0.96x** vs a single fused collective on 4
-and 8 GPUs. Correct, just slower. A hardware finding, not a bug.
-
-**Attention weight downgrade q8_0 → q5_K — REJECTED.** The hypothesis was
-textbook-correct and still wrong, which is why it is worth remembering. Decode is
-weight-bandwidth bound (AI ≈ 6 FLOP/byte vs a roofline far above it), attention
-tensors are ~56% of per-token decode traffic, so ~35% fewer bytes should have
-bought ~20% end-to-end. It did not: **the k-quant decoder is ALU-bound, so
-narrower formats cost more unpack work than they save in bytes.** Every denser
-format tested (q6_K, q5_K, q4_K, q4_0, iq4_nl, mxfp4, nvfp4) was *slower in wall
-clock* than q8_0 at attention shapes despite moving fewer bytes; nvfp4 was worst
-at ~2.5x slower while moving 47% fewer bytes.
-
-**Generalized rule:** on CDNA3, "fewer bytes" only wins if the kernel is actually
-near the bandwidth roofline. Measure achieved fraction of roofline *first*. At
-~14% of roofline you are ALU-bound and format changes will backfire.
-
-### The LDS pattern
-
-LDS staging **lost** for dense GEMM B-tiles and for `qgemm` wide tiles, but
-**won 1.4–2.0x** for k-quant span-fill decode. The distinction is reuse per
-barrier: staging pays only when many lanes read each staged byte multiple times.
-Do not assume either direction — A/B it, and report which side of that line the
-kernel is on.
+The distilled findings index moved to `perf/findings.md`.
+Read it before proposing any experiment — its Wins, Rejected, Patterns, and
+Open-contradictions entries are current truth until re-measured. Distill new
+conclusions there, not here; raw evidence stays in `perf/optimization_status.md`.
 
 ---
 
