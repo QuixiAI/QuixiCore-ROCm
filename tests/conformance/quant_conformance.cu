@@ -174,6 +174,22 @@ int main(int argc, char** argv) {
         g_fail = 1;
     }
 
+    // Machine-readable conformance lines (umbrella docs/correctness.md);
+    // capture with: <binary> | sed -n 's/^QC-CONFORMANCE //p' \
+    //   > .quixicore/conformance.jsonl
+    printf("QC-CONFORMANCE {\"schema\":1,\"backend\":\"rocm\",\"format\":\"e8m0\","
+           "\"decoder\":\"e8m0_decode_exact\",\"vectors\":\"test-vectors/quant/e8m0.json\","
+           "\"cases\":%d,\"failed\":%d,\"verdict\":\"%s\"}\n",
+           n, exact_bad, exact_bad ? "divergent" : "conformant");
+    printf("QC-CONFORMANCE {\"schema\":1,\"backend\":\"rocm\",\"format\":\"e8m0_gguf\","
+           "\"decoder\":\"e8m0_decode_pow2\",\"vectors\":\"test-vectors/quant/e8m0_gguf.json\","
+           "\"cases\":%d,\"failed\":%d,\"verdict\":\"%s\"}\n",
+           n, ggml_bad, ggml_bad ? "divergent" : "conformant");
+    printf("QC-CONFORMANCE {\"schema\":1,\"backend\":\"rocm\",\"format\":\"e8m0\","
+           "\"decoder\":\"e8m0_decode_fast\",\"vectors\":\"test-vectors/quant/e8m0.json\","
+           "\"cases\":%d,\"failed\":%d,\"verdict\":\"divergent_documented\","
+           "\"note\":\"fast path diverges at edge codes per the producer contract\"}\n",
+           n, fast_div);
     printf("\n%s\n", g_fail ? "FAILED" : "ALL PASS");
     return g_fail;
 }
