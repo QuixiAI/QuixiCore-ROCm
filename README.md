@@ -119,28 +119,35 @@ python3 setup.py develop
 
 ## Unit tests
 
-We provide unit tests for you to optionally test the correctness of library functions. 
+We provide unit tests for you to optionally test the correctness of library functions. The suite is
+split by architecture; build and run the one matching your GPU.
 
 ```bash
-cd QuixiCore-ROCm/tests/unit
-make -j64
+# CDNA4 (MI350X / MI355X, gfx950)
+cd QuixiCore-ROCm/tests/unit/cdna4
+make -j64 && ./unit_tests
+
+# UDNA1 (MI400 / MI450, gfx1250)
+cd QuixiCore-ROCm/tests/unit/udna1
+make -j64 && ./unit_tests
 ```
+
+`TEST_INTENSITY` (0–4, default 2) bounds the tile-size sweep — 2 is the intended configuration.
 
 ## Quick start: running kernels
 
-We assume you will run the following on an MI350X or MI355X unless otherwise specified. You should use the CDNA3 branch of HK to run on the MI300X or MI325X.
+We assume you will run the following on an MI350X or MI355X unless otherwise specified. The CDNA3 variants under `variants/rocm_cdna3/` run on the MI300X or MI325X; every supported target lives side by side in `main`.
 
 1. **BF16 GEMM**
 ```bash
 # Defaults to 8192x8192x8192
 # This will compare to AITER and PyTorch automatically.
-cd kernels/gemm/bf16fp32/
+cd kernels/matmul/bf16fp32/variants/rocm_cdna4/mi350x/
 make clean && make
 python bench.py
 
 # On the mi300x or mi325x run:
-git checkout cdna3 # not the main branch!
-cd kernels/gemm/bf16fp32/mi325x/8192_256_256_64_16/
+cd kernels/matmul/bf16fp32/variants/rocm_cdna3/8192_256_256_64_16/
 make clean && make
 python test_python.py
 ```
@@ -150,33 +157,33 @@ python test_python.py
 ```bash
 # GQA, Non-causal, D=128, N=2048, H=64, H_KV=8, B=16:
 # This will compare to AITER automatically. 
-cd kernels/attn/gqa/
+cd kernels/attention/gqa/variants/rocm_cdna4/
 make clean && make
 python test_python.py
 ```
 
 - Modify the ```ATTN_N``` sequence length (e.g., 1024, 2048, 4096, 8192), ```ATTN_H``` query heads and ```ATTN_H_KV``` key value heads (e.g., 16 and 16 for MHA), ```ATTN_D``` head dimension (i.e., 64 or 128) in the Makefile and test_python.py file to try other settings.
-- Use the same process for [gqa_causal](https://github.com/QuixiAI/QuixiCore-ROCm/tree/main/kernels/attn/gqa_causal).
+- Use the same process for [gqa_causal](https://github.com/QuixiAI/QuixiCore-ROCm/tree/main/kernels/attention/gqa_causal/variants/rocm_cdna4).
 
 3. **Attention backwards (MHA, GQA, Causal, Non-causal, Head dim 128 / 64)**
 
 ```bash
 # GQA, Non-causal, D=128, N=8192, H=64, H_KV=8, B=16:
 # This will compare to AITER automatically. 
-cd kernels/attn/gqa_backwards/
+cd kernels/attention/gqa_backward/variants/rocm_cdna4/
 make clean && make
 python test_python.py 
 ```
 
 - Modify the settings in the same way as stated above for forwards.
-- Try [gqa_causal_backwards](https://github.com/QuixiAI/QuixiCore-ROCm/tree/main/kernels/attn/gqa_causal_backwards).
+- Try [gqa_causal_backwards](https://github.com/QuixiAI/QuixiCore-ROCm/tree/main/kernels/attention/gqa_causal_backward/variants/rocm_cdna4).
 
 4. **Memory bound**
 
 ```bash
 # Rotary (default B=16, H=16, D=128, N=2048)
 # This will compare to AITER, PyTorch, PyTorch compiled automatically.
-cd kernels/rotary/
+cd kernels/attention/rotary/variants/rocm_cdna4/
 make clean && make
 python test_python.py
 ```
@@ -184,7 +191,7 @@ python test_python.py
 ```bash
 # Layernorm fused (default B=16, H=16, D=128, N=4096)
 # This will compare to PyTorch, PyTorch compiled automatically.
-cd kernels/layernorm/
+cd kernels/norms/layernorm/variants/rocm_cdna4/
 make clean && make
 python test_python.py
 ```

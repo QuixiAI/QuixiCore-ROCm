@@ -8,19 +8,9 @@
 #include "../../common/common.cuh"
 #include "../shared/shared.cuh"
 #include "util.cuh"
+#include "gl_layout.cuh"
 
 namespace kittens {
-
-/* ----------   Associative dictionary for global layouts  ---------- */
-
-namespace detail {
-template<typename... Args>
-struct descriptor_dict {
-    __host__ descriptor_dict() {}
-    template<typename T> __host__ descriptor_dict(T _, int b, int d, int r, int c) {}
-    __host__ __device__ descriptor_dict(const descriptor_dict &other) {}
-};
-}
 
 /* ----------  Global layout descriptor  ---------- */
 
@@ -30,9 +20,12 @@ struct identifier {};
 }
 }
 
-template<typename _T, int b, int d, int r, int c, typename... TMA_Types>
+template<typename _T, int b, int d, int r, int c,
+         ducks::gl_layout::all _Layout = ducks::gl_layout::row_major>
 struct gl {
     using identifier = ducks::gl::identifier;
+
+    using layout = _Layout; ///< Memory layout of the descriptor.
 
     using T     = base_types::packing<_T>::unpacked_type;
     using T2    = base_types::packing<_T>::packed_type;
@@ -56,23 +49,27 @@ struct gl {
     template <int C=__c__> __device__ __host__ static constexpr std::enable_if_t<(C > 0), int> cols() { return C; }
     template <int C=__c__> __device__ __host__ std::enable_if_t<(C == -1), int> cols() const { return cols_internal; }
 
-    detail::descriptor_dict<TMA_Types...> tma_descs;
-
     __host__ inline gl(T *_data,
                         ducks::gl::make_arg_t<b> _batch,
                         ducks::gl::make_arg_t<d> _depth,
                         ducks::gl::make_arg_t<r> _rows,
                         ducks::gl::make_arg_t<c> _cols) :
-            raw_ptr(_data), batch_internal(_batch), depth_internal(_depth), rows_internal(_rows), cols_internal(_cols) {
-        tma_descs = detail::descriptor_dict<TMA_Types...>(raw_ptr, batch_internal, depth_internal, rows_internal, cols_internal);
-    }
+            raw_ptr(_data), batch_internal(_batch), depth_internal(_depth), rows_internal(_rows), cols_internal(_cols) {}
     __host__ __device__ inline gl(const gl &other) :
-            raw_ptr(other.raw_ptr), batch_internal(other.batch_internal), depth_internal(other.depth_internal), rows_internal(other.rows_internal), cols_internal(other.cols_internal), tma_descs(other.tma_descs) {}
+            raw_ptr(other.raw_ptr), batch_internal(other.batch_internal), depth_internal(other.depth_internal), rows_internal(other.rows_internal), cols_internal(other.cols_internal) {}
     __device__ inline T& operator[](const coord<ducks::default_type> &idx) const {
-        return raw_ptr[((int64_t(idx.b)*depth() + idx.d)*rows() + idx.r)*cols() + idx.c];
+        return raw_ptr[this->idx(idx)];
     }
-    __device__ inline int64_t idx(const coord<ducks::default_type> &idx) const {
+    /* One constrained overload per layout, so selection is by resolution rather than by a
+     * branch. A layout with no overload here is not a silent fall-through: it is "no viable
+     * member" at the call site. */
+    __device__ inline int64_t idx(const coord<ducks::default_type> &idx) const
+        requires std::is_same_v<layout, ducks::gl_layout::row_major> {
         return ((int64_t(idx.b)*depth() + idx.d)*rows() + idx.r)*cols() + idx.c;
+    }
+    __device__ inline int64_t idx(const coord<ducks::default_type> &idx) const
+        requires std::is_same_v<layout, ducks::gl_layout::col_major> {
+        return ((int64_t(idx.b)*depth() + idx.d)*cols() + idx.c)*rows() + idx.r;
     }
     template<int axis> __device__ inline size_t shape() const {
         static_assert(axis==0 || axis==1 || axis==2 || axis==3, "Axis must be 0, 1, 2, or 3.");
@@ -81,12 +78,42 @@ struct gl {
         else if constexpr (axis==2) { return size_t(rows()); }
         else if constexpr (axis==3) { return size_t(cols()); }
     }
-    template<int axis> __device__ inline size_t stride() const { 
+    /* Strides follow the layout. Under col_major the ROW axis is the unit-stride one, which is
+     * the whole point: it is what lets a store whose register-contiguous axis is M emit a wide
+     * store instead of a scatter. */
+    /* Likewise per layout. The `axis` branching stays a branch -- axis is an int, not a layout,
+     * and there is nothing for resolution to select on. */
+    template<int axis> __device__ inline size_t stride() const
+        requires std::is_same_v<layout, ducks::gl_layout::row_major> {
         static_assert(axis==0 || axis==1 || axis==2 || axis==3, "Axis must be 0, 1, 2, or 3.");
         if      constexpr (axis==0) { return depth()*rows()*cols(); }
         else if constexpr (axis==1) { return rows()*cols(); }
         else if constexpr (axis==2) { return cols(); }
-        else if constexpr (axis==3) { return 1; }
+        else                        { return 1; }
+    }
+    template<int axis> __device__ inline size_t stride() const
+        requires std::is_same_v<layout, ducks::gl_layout::col_major> {
+        static_assert(axis==0 || axis==1 || axis==2 || axis==3, "Axis must be 0, 1, 2, or 3.");
+        if      constexpr (axis==0) { return depth()*rows()*cols(); }
+        else if constexpr (axis==1) { return rows()*cols(); }
+        else if constexpr (axis==2) { return 1; }
+        else                        { return rows(); }
+    }
+
+    /* Element offset of (row, col) from a tile base, in the units `raw_ptr` is indexed in. The one
+     * place a layout becomes an address: the contiguous axis contributes its coordinate unscaled and
+     * the other is scaled by its stride. `axis` names the tile's row axis, as it does for `stride`.
+     *
+     * The multiply stays 32-bit on purpose. Both coordinates are bounded by the tile and the stride by
+     * the tensor, so the product cannot overflow, while widening it makes the backend give up on
+     * proving the base wave-uniform and materialise it into a VGPR pair. */
+    template<int axis> __device__ inline int64_t offset(int row, int col) const
+        requires std::is_same_v<layout, ducks::gl_layout::row_major> {
+        return (int64_t)row * (int)stride<axis>() + col;
+    }
+    template<int axis> __device__ inline int64_t offset(int row, int col) const
+        requires std::is_same_v<layout, ducks::gl_layout::col_major> {
+        return (int64_t)col * (int)stride<3>() + row;
     }
 };
 
@@ -102,6 +129,26 @@ namespace gl {
 template<typename T> concept all = requires {
     typename T::identifier; // Checks if T::identifier exists
 } && std::is_same_v<typename T::identifier, identifier>; // Checks if T::identifier is ducks::gl::identifier
+/**
+* @brief Concept for global layouts with row-major layout.
+* @tparam T The type to check against the concept requirements.
+*
+* Requires:
+* - T is a global layout.
+* - T has an internal type layout that is ducks::gl_layout::row_major.
+*/
+template<typename T>
+concept row_layout = all<T> && std::is_same_v<typename T::layout, ducks::gl_layout::row_major>;
+/**
+* @brief Concept for global layouts with column-major layout.
+* @tparam T The type to check against the concept requirements.
+*
+* Requires:
+* - T is a global layout.
+* - T has an internal type layout that is ducks::gl_layout::col_major.
+*/
+template<typename T>
+concept col_layout = all<T> && std::is_same_v<typename T::layout, ducks::gl_layout::col_major>;
 }
 }
 

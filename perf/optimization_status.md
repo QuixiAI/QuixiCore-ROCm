@@ -40,68 +40,69 @@ re-reading their evidence, never by guessing.
 
 | date | entry | verdict | line |
 |---|---|---|---:|
-| 2026-07-06 | Shared Performance Documentation Port | LANDED | 107 |
-| 2026-07-06 | CUDA Kernel Surface To CDNA3 Inventory | DEFERRED | 123 |
-| 2026-07-06 | Elementwise/Norm Family CDNA3 Port + Wavefront-Width A/B | KEPT | 170 |
-| 2026-07-06 | Quant Dequant + GEMV Family CDNA3 Port | KEPT | 232 |
-| 2026-07-06 | Serving Family CDNA3 Port | LANDED | 295 |
-| 2026-07-06 | MoE Family CDNA3 Port | KEPT | 340 |
-| 2026-07-06 | Quant Tensor-Core GEMM CDNA3 MFMA Rewrite | LANDED | 362 |
-| 2026-07-06 | Quant/MoE Tensor-Core Tail (MFMA + plain) | KEPT | 402 |
-| 2026-07-06 | ThunderKittens Compute Tier — GQA Attention CDNA3 Finding | UNLABELED | 437 |
-| 2026-07-06 | Linear-Attention (TM) + Mamba2 Selective-Scan CDNA3 Ports | LANDED | 477 |
-| 2026-07-06 | pyext Harness Unblock (LD_PRELOAD) + Attention Re-confirmation | UNLABELED | 496 |
-| 2026-07-06 | CDNA3 GQA Attention Forward | SOLVED | 515 |
-| 2026-07-06 | CDNA3 GQA Attention Backward | SOLVED | 540 |
-| 2026-07-06 | flux + Based CDNA3 Ports | KEPT | 556 |
-| 2026-07-06 | ThunderKittens Compute Tier COMPLETE (hedgehog, decay-linattn, fftconv, mamba2 SSD) | LANDED | 568 |
-| 2026-07-07 | Fused Collective+GEMM on CDNA3 | VALIDATED | 591 |
-| 2026-07-07 | Elementwise/Norm 64-Lane Widening | LANDED | 617 |
-| 2026-07-07 | Attention Forward MFMA-Tiling | LANDED | 647 |
-| 2026-07-07 | flux GEMM LDS-B Experiment | REJECTED | 680 |
-| 2026-07-07 | qgemm Wide N-Tile (X-reuse) | LANDED | 710 |
-| 2026-07-07 | qgemm LDS-Staged Wide Tile | REJECTED | 742 |
-| 2026-07-07 | qgemm Multi-Wave CTA LDS Tile | CANDIDATE | 793 |
-| 2026-07-07 | Collective+GEMM Compute/Comm Overlap (chunked RCCL) | REJECTED | 870 |
-| 2026-07-07 | Library/Framework Baselines (Step 7a) | RECORDED | 904 |
-| 2026-07-07 | New Distributed Kernels (Step 6) | LANDED | 933 |
-| 2026-07-07 | Iris In-Kernel XGMI Overlap (Step 8, optional) | FEASIBILITY | 963 |
-| 2026-07-07 | Remaining CUDA Functional Coverage To CDNA3 | LANDED | 990 |
-| 2026-07-07 | Metal Gap Kernel Ports To CDNA3 | KEPT | 1055 |
-| 2026-07-22 | embeddinggemma.c ROCm Kernel Ports To CDNA3 | KEPT | 1162 |
-| 2026-07-25 | Metal/CPU Parity Program — Phase 0 Harness Infrastructure | KEPT | 1223 |
-| 2026-07-25 | cross_attention (Metal/CPU parity Phase 1) | KEPT | 1290 |
-| 2026-07-25 | biased_attention (Metal/CPU parity Phase 1) | KEPT | 1372 |
-| 2026-07-25 | rope_variants — 8 RoPE operations (Metal/CPU parity Phase 1) | MIXED | 1455 |
-| 2026-07-25 | attn_composites — swin / decode-cache / cascade (Phase 1 complete) | KEPT | 1549 |
-| 2026-07-25 | kv_cache_q8_0 — Q8_0 paged KV codec (Phase 2, 4/17) | KEPT | 1616 |
-| 2026-07-26 | matmul-decode_epilogues Phase 3 CPU/Metal parity | MIXED | 1679 |
-| 2026-07-26 | matmul-decode_epilogues packed Phase 3 completion | KEPT | 1744 |
-| 2026-07-26 | MoE Phase 4 CPU/Metal parity completion | KEPT | 1803 |
-| 2026-07-26 | In-GEMM k-quant Decode (dequant4 MFMA fragment) | LANDED | 1873 |
-| 2026-07-26 | LDS-Staged k-quant Tile Decode (span fill) | LANDED | 1951 |
-| 2026-07-26 | Attention Weight-Format Downgrade (q8_0 -> q5_K) | REJECTED | 2025 |
-| 2026-07-26 | BaseQ Phase 5 Canonical Family | KEPT | 2114 |
-| 2026-07-26 | MXFP8 paged KV-cache codec (Phase 2, 6/17) | LANDED | 2169 |
-| 2026-07-26 | paged_attention_mxfp8 (Phase 2, 7/17) | LANDED | 2214 |
-| 2026-07-26 | quantized MLA absorbed decode, dense + sparse (Phase 2, 9/17) | LANDED | 2259 |
-| 2026-07-26 | kv_cache_scale_update (Phase 2, 10/17) | LANDED | 2300 |
-| 2026-07-26 | turboquant_query_transform (Phase 2, 11/17) | LANDED | 2327 |
-| 2026-07-26 | Quant Authoring And Embedding Phase 6 | LANDED | 2352 |
-| 2026-07-26 | Sampling And Embedding Stragglers Phase 7 | LANDED | 2413 |
-| 2026-07-26 | Linear Attention Phase 8 | LANDED | 2459 |
-| 2026-07-26 | State-Space And Hyper-Connections Phase 9 | LANDED | 2509 |
-| 2026-07-26 | Training And Distillation Phase 10 | LANDED | 2552 |
-| 2026-07-26 | Elementwise And Tensor-Op Surface Phase 11 | LANDED | 2600 |
-| 2026-07-26 | Convolution And Audio Phase 12 | LANDED | 2647 |
-| 2026-07-26 | Vision Phase 13 | LANDED | 2690 |
-| 2026-07-26 | Quantized Decode Phase 2 Close-Out | LANDED | 2738 |
-| 2026-07-26 | Recent Metal Operation Parity | LANDED | 2785 |
-| 2026-08-01 | serving `v2_batch_prep` (V2 model-runner batch prep) | MIXED | 2853 |
-| 2026-08-01 | serving `v2_sample` (V2 sampler / spec-decode) | KEPT | 2899 |
-| 2026-08-01 | serving `sparse_indexer` (ROCm sparse-MLA indexer) | KEPT | 2956 |
-| 2026-08-01 | serving `fp8_mqa_logits` (DSA indexer MQA logits, fp8 MFMA) | UNLABELED | 3014 |
-| 2026-08-02 | quantization `mxfp4_gguf` (OCP MXFP4 in the GGUF layout) | UNLABELED | 3057 |
+| 2026-07-06 | Shared Performance Documentation Port | LANDED | 108 |
+| 2026-07-06 | CUDA Kernel Surface To CDNA3 Inventory | DEFERRED | 124 |
+| 2026-07-06 | Elementwise/Norm Family CDNA3 Port + Wavefront-Width A/B | KEPT | 171 |
+| 2026-07-06 | Quant Dequant + GEMV Family CDNA3 Port | KEPT | 233 |
+| 2026-07-06 | Serving Family CDNA3 Port | LANDED | 296 |
+| 2026-07-06 | MoE Family CDNA3 Port | KEPT | 341 |
+| 2026-07-06 | Quant Tensor-Core GEMM CDNA3 MFMA Rewrite | LANDED | 363 |
+| 2026-07-06 | Quant/MoE Tensor-Core Tail (MFMA + plain) | KEPT | 403 |
+| 2026-07-06 | ThunderKittens Compute Tier — GQA Attention CDNA3 Finding | UNLABELED | 438 |
+| 2026-07-06 | Linear-Attention (TM) + Mamba2 Selective-Scan CDNA3 Ports | LANDED | 478 |
+| 2026-07-06 | pyext Harness Unblock (LD_PRELOAD) + Attention Re-confirmation | UNLABELED | 497 |
+| 2026-07-06 | CDNA3 GQA Attention Forward | SOLVED | 516 |
+| 2026-07-06 | CDNA3 GQA Attention Backward | SOLVED | 541 |
+| 2026-07-06 | flux + Based CDNA3 Ports | KEPT | 557 |
+| 2026-07-06 | ThunderKittens Compute Tier COMPLETE (hedgehog, decay-linattn, fftconv, mamba2 SSD) | LANDED | 569 |
+| 2026-07-07 | Fused Collective+GEMM on CDNA3 | VALIDATED | 592 |
+| 2026-07-07 | Elementwise/Norm 64-Lane Widening | LANDED | 618 |
+| 2026-07-07 | Attention Forward MFMA-Tiling | LANDED | 648 |
+| 2026-07-07 | flux GEMM LDS-B Experiment | REJECTED | 681 |
+| 2026-07-07 | qgemm Wide N-Tile (X-reuse) | LANDED | 711 |
+| 2026-07-07 | qgemm LDS-Staged Wide Tile | REJECTED | 743 |
+| 2026-07-07 | qgemm Multi-Wave CTA LDS Tile | CANDIDATE | 794 |
+| 2026-07-07 | Collective+GEMM Compute/Comm Overlap (chunked RCCL) | REJECTED | 871 |
+| 2026-07-07 | Library/Framework Baselines (Step 7a) | RECORDED | 905 |
+| 2026-07-07 | New Distributed Kernels (Step 6) | LANDED | 934 |
+| 2026-07-07 | Iris In-Kernel XGMI Overlap (Step 8, optional) | FEASIBILITY | 964 |
+| 2026-07-07 | Remaining CUDA Functional Coverage To CDNA3 | LANDED | 991 |
+| 2026-07-07 | Metal Gap Kernel Ports To CDNA3 | KEPT | 1056 |
+| 2026-07-22 | embeddinggemma.c ROCm Kernel Ports To CDNA3 | KEPT | 1163 |
+| 2026-07-25 | Metal/CPU Parity Program — Phase 0 Harness Infrastructure | KEPT | 1224 |
+| 2026-07-25 | cross_attention (Metal/CPU parity Phase 1) | KEPT | 1291 |
+| 2026-07-25 | biased_attention (Metal/CPU parity Phase 1) | KEPT | 1373 |
+| 2026-07-25 | rope_variants — 8 RoPE operations (Metal/CPU parity Phase 1) | MIXED | 1456 |
+| 2026-07-25 | attn_composites — swin / decode-cache / cascade (Phase 1 complete) | KEPT | 1550 |
+| 2026-07-25 | kv_cache_q8_0 — Q8_0 paged KV codec (Phase 2, 4/17) | KEPT | 1617 |
+| 2026-07-26 | matmul-decode_epilogues Phase 3 CPU/Metal parity | MIXED | 1680 |
+| 2026-07-26 | matmul-decode_epilogues packed Phase 3 completion | KEPT | 1745 |
+| 2026-07-26 | MoE Phase 4 CPU/Metal parity completion | KEPT | 1804 |
+| 2026-07-26 | In-GEMM k-quant Decode (dequant4 MFMA fragment) | LANDED | 1874 |
+| 2026-07-26 | LDS-Staged k-quant Tile Decode (span fill) | LANDED | 1952 |
+| 2026-07-26 | Attention Weight-Format Downgrade (q8_0 -> q5_K) | REJECTED | 2026 |
+| 2026-07-26 | BaseQ Phase 5 Canonical Family | KEPT | 2115 |
+| 2026-07-26 | MXFP8 paged KV-cache codec (Phase 2, 6/17) | LANDED | 2170 |
+| 2026-07-26 | paged_attention_mxfp8 (Phase 2, 7/17) | LANDED | 2215 |
+| 2026-07-26 | quantized MLA absorbed decode, dense + sparse (Phase 2, 9/17) | LANDED | 2260 |
+| 2026-07-26 | kv_cache_scale_update (Phase 2, 10/17) | LANDED | 2301 |
+| 2026-07-26 | turboquant_query_transform (Phase 2, 11/17) | LANDED | 2328 |
+| 2026-07-26 | Quant Authoring And Embedding Phase 6 | LANDED | 2353 |
+| 2026-07-26 | Sampling And Embedding Stragglers Phase 7 | LANDED | 2414 |
+| 2026-07-26 | Linear Attention Phase 8 | LANDED | 2460 |
+| 2026-07-26 | State-Space And Hyper-Connections Phase 9 | LANDED | 2510 |
+| 2026-07-26 | Training And Distillation Phase 10 | LANDED | 2553 |
+| 2026-07-26 | Elementwise And Tensor-Op Surface Phase 11 | LANDED | 2601 |
+| 2026-07-26 | Convolution And Audio Phase 12 | LANDED | 2648 |
+| 2026-07-26 | Vision Phase 13 | LANDED | 2691 |
+| 2026-07-26 | Quantized Decode Phase 2 Close-Out | LANDED | 2739 |
+| 2026-07-26 | Recent Metal Operation Parity | LANDED | 2786 |
+| 2026-08-01 | serving `v2_batch_prep` (V2 model-runner batch prep) | MIXED | 2854 |
+| 2026-08-01 | serving `v2_sample` (V2 sampler / spec-decode) | KEPT | 2900 |
+| 2026-08-01 | serving `sparse_indexer` (ROCm sparse-MLA indexer) | KEPT | 2957 |
+| 2026-08-01 | serving `fp8_mqa_logits` (DSA indexer MQA logits, fp8 MFMA) | UNLABELED | 3015 |
+| 2026-08-02 | quantization `mxfp4_gguf` (OCP MXFP4 in the GGUF layout) | UNLABELED | 3058 |
+| 2026-08-25 | Upstream HipKittens sync (PR #3) | RECORDED | 3094 |
 <!-- qx:index:end -->
 
 ## 2026-07-06: Shared Performance Documentation Port — LANDED
@@ -3089,3 +3090,63 @@ wider per-wave tile or multi-row blocking is the obvious next experiment once it
 is wired into a real serving path and the shapes are known.
 
 Raw results: `perf/results/2026-08-02/mxfp4-gguf/bench.txt`.
+
+## 2026-08-25: Upstream HipKittens sync (PR #3) — RECORDED
+
+Merged upstream `HazyResearch/HipKittens@3c4b91e4` into `main`. No performance
+claim: the merge lands upstream source, and every kernel it touches targets
+hardware this host does not have.
+
+Conflict policy, since both sides restructured `kernels/` after the fork:
+upstream moved to an architecture-first tree (`kernels/cdna4/...`), this repo
+moved to the contract taxonomy in `docs/repository-structure.md`
+(`kernels/<family>/<operation>/variants/rocm_<target>/`). The taxonomy wins —
+upstream's arch-first paths were dropped and their content re-landed under the
+matching QuixiCore path. `include/cdna3/` was likewise kept as ours: upstream
+grew its own CDNA3 header tree in this window, ours is a strict superset of it
+(assembly ops, `art`/`rt_shape`/`st_shape`, quant primitives) and is what every
+CDNA3 kernel here compiles against.
+
+Kernel-affecting content that came across:
+
+- `kernels/matmul/bf16fp32/variants/rocm_udna1/gfx1250/` — upstream replaced the
+  8-kernel gfx1250 ladder with a 13-rung pybind11 ladder (`00_gemm_naive` ..
+  `12_gemm_two_waves`, `pyext.h`, `gemm_ladder.py`, `test.py`). Imported whole;
+  only the `common.mk` include depth was re-pathed.
+- `kernels/matmul/mxfp8/archive/.../MXFP8_4wave/4_wave.cu` — one upstream
+  `s_waitcnt lgkmcnt(0)` before the second A-tile group load.
+- `kernels/linear_attention/archive/rocm_cdna4_chunked_repro/` — upstream's
+  `kernels/cdna4/attn/repro`, a compile-and-inspect scaffold whose chunk loop
+  ends at a `// TODO`; filed under `archive/` because it has no oracle and no
+  benchmark. Upstream's committed `.s` listings and `build.log` were not taken —
+  `make --save-temps` regenerates them.
+- `kernels/matmul/fp8fp32/variants/rocm_cdna3/8192_256_256_64_32/data_logs/` —
+  an upstream MI300X run archive (912 TFLOP/s in its JSON). Upstream's number,
+  not ours; the directory carries a README saying so.
+- Upstream's `kernels/cdna3/layernorm/` was dropped as redundant: our
+  `kernels/norms/layernorm/variants/rocm_cdna3/kernel.cpp` already carries both
+  of its deltas (`__launch_bounds__(NUM_THREADS, 2)`, `rv` over `rv_naive`) plus
+  a deterministic seed and configurable dropout upstream lacks.
+
+Correctness/build evidence on this host (MI300X, ROCm 7.2.4 / HIP
+7.2.53211, hipcc AMD clang 22.0.0git, working tree at the merge commit):
+
+- `kittens.cuh` compiles for all three targets — `-DKITTENS_CDNA3
+  --offload-arch=gfx942`, `-DKITTENS_CDNA4 --offload-arch=gfx950`,
+  `-DKITTENS_UDNA1 --offload-arch=gfx1250` — all clean.
+- `tests/unit/cdna4` builds clean (`make -j16`, gfx950 codegen).
+- `tests/unit/udna1` FAILS to build, and did so before this merge as well:
+  pre-merge `HEAD` (3 errors) and pristine upstream `origin/pr/3` (21 errors)
+  fail the same TU, `warp/memory/tile/global_to_shared.cu`, with
+  `kittens::load_async` now living at `kittens::tdm::load_async` and the
+  `cols == Shape::cols` static assert firing for `st_16x32_padded`. Pre-existing
+  upstream/toolchain state, not a merge regression, and not fixable here without
+  gfx1250 hardware and the newer toolchain upstream's README names (ROCm 7.15).
+
+Not measured: the gfx1250 ladder (no MI400/MI450), the CDNA4 mxfp8 waitcnt
+change (no MI350X/MI355X). Both are recorded as imported source only. Nothing
+in the CDNA3 path this backend does measure changed — `include/cdna3/` and every
+`variants/rocm_cdna3/` kernel are byte-identical to pre-merge `main`, so no
+re-baseline is owed.
+
+Raw results: none — no benchmark was run for this entry.
