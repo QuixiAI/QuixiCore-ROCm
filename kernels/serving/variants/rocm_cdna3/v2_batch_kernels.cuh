@@ -161,6 +161,17 @@ __global__ void get_num_sampled_and_rejected(
 // input_batch.py::_post_update_kernel. One thread per request (the Triton
 // kernel is a serial per-request program); nullable pointers mirror the
 // optional output_bin_counts / query_start_loc arguments.
+//
+// Bounds guard (GLM-5.2/MI300X root cause, 2026-09-01): num_sampled and the
+// sampled_tokens row are tiny per-step allocations, and a foreign writer
+// landing in them turns the output_bin_counts[req * stride + token_id] += 1
+// loop into a scatter of +1 increments across the whole GPU address space:
+// silent KV-pool garbling when the target is mapped, a page fault when it is
+// not. A row is validated in full before any write: ns in [0, sampled_cols],
+// tlen + ns within the all_token_ids row, every token id in [0, vocab_size).
+// A bad row writes nothing and reports itself through `diag` (8 longs:
+// count, reason, r, req_state_idx, ns, tlen, sampled_tokens[r][0],
+// num_rejected[r]) so the host can fail loudly instead of serving garbage.
 __global__ void post_update(
     const int* __restrict__ idx_mapping, int* __restrict__ num_computed_tokens,
     long* __restrict__ last_sampled_tokens,
@@ -169,7 +180,8 @@ __global__ void post_update(
     const int* __restrict__ num_sampled, const int* __restrict__ num_rejected,
     const int* __restrict__ query_start_loc,
     int* __restrict__ all_token_ids, long all_token_ids_stride,
-    int* __restrict__ total_len, int num_reqs) {
+    int* __restrict__ total_len, int num_reqs, int sampled_cols,
+    long vocab_size, long* __restrict__ diag) {
     const int r = blockIdx.x * blockDim.x + threadIdx.x;
     if (r >= num_reqs) return;
     const int req_state_idx = idx_mapping[r];
@@ -177,6 +189,41 @@ __global__ void post_update(
 
     const int tlen = total_len[req_state_idx];
     const int ns = num_sampled[r];
+    {
+        const long* row = sampled_tokens + (long)r * sampled_tokens_stride;
+        int bad = 0;
+        if (ns < 0 || ns > sampled_cols) {
+            bad = 1;
+        } else if (tlen < 0 || (long)tlen + ns > all_token_ids_stride) {
+            bad = 2;
+        } else {
+            for (int i = 0; i < ns; i++) {
+                const long t = row[i];
+                if (t < 0 || (vocab_size > 0 && t >= vocab_size)) {
+                    bad = 3;
+                    break;
+                }
+            }
+        }
+        if (bad != 0) {
+            if (diag != nullptr &&
+                atomicAdd(reinterpret_cast<unsigned long long*>(&diag[0]),
+                          1ull) == 0ull) {
+                diag[1] = bad;
+                diag[2] = r;
+                diag[3] = req_state_idx;
+                diag[4] = ns;
+                diag[5] = tlen;
+                diag[6] = sampled_cols > 0 ? row[0] : -1;
+                diag[7] = num_rejected[r];
+                // Raw dump of the 256 bytes at the row for fingerprinting the
+                // foreign writer (stays inside the allocator's 512 B minimum
+                // block; diagnostic only, read on the violating path).
+                for (int k = 0; k < 32; k++) diag[8 + k] = row[k];
+            }
+            return;  // No state writes from a corrupted row.
+        }
+    }
     if (ns > 0) {
         last_sampled_tokens[req_state_idx] =
             sampled_tokens[(long)r * sampled_tokens_stride + ns - 1];

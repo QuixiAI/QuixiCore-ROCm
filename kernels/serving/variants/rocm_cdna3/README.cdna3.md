@@ -21,6 +21,8 @@ in-process fp64 / exact-replay reference) — no golden files.
 | `spec_beam` | speculative-decode tree build + verify |
 | `eagle_test` | EAGLE speculative helpers |
 | `sparse_serving_test` | sparse/blocksparse serving helpers |
+| `fp8_paged_mqa_logits_test` | DSA indexer logits straight from the paged (packed-slab) cache, 64-bit addressing; bitwise vs the contiguous kernel, fp64 oracle, past-2GiB case |
+| `mla_sparse_varlen_test` | sparse top-k MLA decode (partition + reduce) over a block-strided slab with varlen -1-padded index spans |
 
 ## Port notes (CUDA -> CDNA3)
 

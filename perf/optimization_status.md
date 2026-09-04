@@ -3150,3 +3150,51 @@ in the CDNA3 path this backend does measure changed — `include/cdna3/` and eve
 re-baseline is owed.
 
 Raw results: none — no benchmark was run for this entry.
+
+## 2026-09-03 - serving/rocm_cdna3: paged DSA indexer logits + sparse varlen MLA decode (ported from SlimServe), split-grid optimization
+
+Context: SlimServe replaced two AITER kernels on gfx942. AITER's paged MQA
+logits (Gluon, AMD buffer_load, 32-bit offsets) returns garbage for cache
+blocks past a 2 GiB byte offset on the packed cross-layer KV slab (6 MB
+block stride), and AITER's mla_decode_fwd rejects block-strided caches
+outright. Both replacements now live here as the serving family's
+`fp8_paged_mqa_logits_kernel.cuh` (namespace qcrocm) and
+`mla_sparse_varlen_kernels.cuh` (namespace qc_rocm_mla), with self-checking
+harnesses `fp8_paged_mqa_logits_test` and `mla_sparse_varlen_test`. Headers
+shared with SlimServe (mfma_fp8_dot, fp8_mqa_logits_kernel, v2_batch_kernels
+with the post_update row guard, slot_mapping, sparse_indexer) re-synced.
+
+Correctness (MI300X, ROCm 7.2.4, hipcc 7.2): paged logits bitwise-equal to
+the contiguous kernel on gathered rows, fp64 oracle rel <= 2e-5, cases with
+blocks at 2.14 and 2.53 GiB byte offsets; sparse varlen decode vs fp64
+softmax max abs <= 2e-3 (1/4/8 splits, block 64 and 256, -1 padded spans).
+Whole family `make test`: all 18 harnesses pass.
+
+Baseline (H=32, 64 decode rows x 32K context, real 6 MB stride):
+one CTA per row = 64 CTAs on 304 CUs -> 1.68 ms, 10.2 TFLOP/s, 169 GB/s.
+Hypothesis: occupancy-bound, not bandwidth-bound - each CTA streams its row's
+4.3 MB of keys serially through one wavefront group.
+
+Optimization (kept): split each row's context across CTAs (`split_len`,
+grid = rows x splits; empty splits exit at once, so the grid can be sized
+for max_model_len and stay static for graph replay):
+
+| split | CTAs | ms    | TFLOP/s | GB/s eff |
+|------:|-----:|------:|--------:|---------:|
+| whole |   64 | 1.683 |    10.2 |      169 |
+|  8192 |  256 | 0.428 |    40.1 |      667 |
+|  4096 |  512 | 0.234 |    73.6 |     1221 |
+|  2048 | 1024 | 0.149 |   115.4 |     1916 |
+|  1024 | 2048 | 0.111 |   155.1 |     2575 |
+
+15.2x at split 1024; above the contiguous kernel's 112.7 TFLOP/s at
+M=512/N=2048. Empty-split overhead is nil: the same 32K-context batch with
+the grid sized for a 1M max_model_len (65,536 CTAs, 97% empty) runs in
+0.110 ms. Results bitwise identical across splits (the harness runs 5 x 1024
+splits against the contiguous kernel). SlimServe's binding uses split 1024.
+
+Sparse varlen MLA decode bench (T=32, H=16, topk 2048, 8 splits, 4096-block
+strided slab): 0.305 ms, 3.97 TB/s of KV rows read - at the HBM roofline
+(5.3 TB/s peak, ~4 TB/s achievable); no optimization attempted.
+
+Raw: perf/results/2026-09-03/paged_mqa_logits/{bench,test}_gfx942.txt.
