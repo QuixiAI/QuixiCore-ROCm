@@ -3198,3 +3198,47 @@ strided slab): 0.305 ms, 3.97 TB/s of KV rows read - at the HBM roofline
 (5.3 TB/s peak, ~4 TB/s achievable); no optimization attempted.
 
 Raw: perf/results/2026-09-03/paged_mqa_logits/{bench,test}_gfx942.txt.
+
+## 2026-09-04 - serving/rocm_cdna3: NaN-safe sampler argmax (ported from SlimServe)
+
+Sync of `v2_sample_kernels.cuh` with SlimServe's 2026-08-10 DSV4/A100 fix
+(SlimServe commit 6ab3a92fe0), which the library had never received. This
+header is on the MI300X serving path (qc_rocm_sample.cu, every argmax
+launch).
+
+Bug: `argmax_combine` used the negated form `!(v > ov || ...)`, so a NaN
+candidate replaced the running best; combined with the masked -inf tail
+lanes and the 0x7fffffff index sentinels, a block argmax could return an
+out-of-vocab index (observed as token 129280 == vocab_size), which poisoned
+`last_sampled_tokens`/`input_ids` and crashed the DSV4 hash router.
+
+Fix (identical to SlimServe): positive-form combine, NaN sanitized to -inf
+before the max and the sum-exp folds, only in-vocab lanes as candidates,
+and block-base sentinels so an all--inf/NaN block resolves to its base
+index (`v2_gumbel_sample_k`, `v2_resample_k`, `v2_block_max_sumexp_8192`,
+`v2_block_argmax_8192`, `v2_insert_resampled_k`).
+
+Harness (`v2_sample_test.cu`): new `test_gumbel_argmax_nan` and
+`test_block_stats_nan` build rows of four kinds (finite with a tie, NaN
+spots plus a NaN tail, all NaN, all -inf) over a masked vocab tail and
+check against a host oracle (sanitized max, lowest-index ties, base on
+empty), every index in [0, V), and the block sum-exp finite and within
+1e-5 of fp64. Against the previous header they fail exactly as the bug
+predicts (12/24 argmax mismatches, 4/24 out-of-vocab indices, 4/16
+non-finite stats); with the fix ALL PASS. Also a `--bench` case for the
+greedy `v2_gumbel_sample_k` argmax.
+
+Cost (gfx942, V=151552, 256 threads, 200 reps, 3 runs each):
+
+| T  | before   | after    |
+|---:|---------:|---------:|
+|  1 | 0.0044 ms | 0.0044 ms |
+|  4 | 0.0044 ms | 0.0044 ms |
+| 32 | 0.0084 ms | 0.0095 ms |
+| 64 | 0.0170 ms | 0.0191 ms |
+
+The sanitize and in-range branch cost ~12% on the memory-bound T=64 case
+(2.3 -> 2.05 TB/s), 2 us per decode step. Decision: KEPT as is; correctness
+over an out-of-vocab token, and SlimServe already serves this code.
+
+Raw: perf/results/2026-09-04/v2_sample_nan/{test,bench}_gfx942*.txt.

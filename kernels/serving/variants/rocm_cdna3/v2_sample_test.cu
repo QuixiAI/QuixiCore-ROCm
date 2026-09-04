@@ -22,6 +22,7 @@
  */
 #include "v2_sample_kernels.cuh"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -232,6 +233,189 @@ static void test_min_p() {
 }
 
 // -------------------------------------------------------------------- bench
+// ------------------------------------------------- NaN / -inf argmax safety
+// SlimServe 2026-08-10 (DSV4 on A100): NaN logits let the old negated-form
+// argmax_combine take a NaN candidate, and with the masked -inf tail lanes the
+// block argmax returned an out-of-vocab index (token 129280 == vocab_size),
+// which poisoned last_sampled_tokens/input_ids and crashed the hash router.
+// Contract now: every argmax index is in [0, V); NaN sanitizes to -inf; an
+// all--inf/NaN block resolves to its base index; ties keep the lowest index;
+// the block sumexp never sees NaN.
+
+enum RowKind { ROW_FINITE, ROW_NAN_SPOTS, ROW_ALL_NAN, ROW_ALL_NEG_INF, ROW_KINDS };
+
+static std::vector<float> make_rows(int T, int V, uint32_t seed) {
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> U(-8.0f, 8.0f);
+    std::vector<float> lg((size_t)T * V);
+    for (int t = 0; t < T; ++t) {
+        float* row = lg.data() + (size_t)t * V;
+        const int kind = t % ROW_KINDS;
+        for (int j = 0; j < V; ++j) {
+            switch (kind) {
+                case ROW_FINITE: row[j] = U(rng); break;
+                case ROW_NAN_SPOTS: row[j] = (j % 7 == 3 || j > V - 300) ? NAN : U(rng); break;
+                case ROW_ALL_NAN: row[j] = NAN; break;
+                default: row[j] = -INFINITY; break;
+            }
+        }
+        if (kind == ROW_FINITE || kind == ROW_NAN_SPOTS) {
+            // A deliberate tie so the lowest-index rule is exercised too.
+            row[V / 2] = 9.0f;
+            row[V / 2 + 5] = 9.0f;
+        }
+    }
+    return lg;
+}
+
+// Host oracle for one [base, base+width) block of a row: sanitized max with
+// lowest-index ties; an empty/all -inf block resolves to base.
+static void host_block_argmax(const float* row, int V, int base, int width,
+                              float& bv, int& bi) {
+    bv = -INFINITY;
+    bi = base;
+    for (int j = base; j < base + width && j < V; ++j) {
+        float x = row[j];
+        if (x != x) x = -INFINITY;
+        if (x > bv) { bv = x; bi = j; }
+    }
+}
+
+static void test_gumbel_argmax_nan() {
+    const int T = 8, V = 3000, NB = (V + 1023) / 1024;  // 3 blocks, masked tail
+    std::vector<float> lg = make_rows(T, V, 7);
+    std::vector<int32_t> idx(T, 0);
+    std::vector<int64_t> seeds(1, 0), pos(T, 0);
+    std::vector<float> temp(1, 0.0f);  // greedy: pure argmax
+    std::vector<int64_t> la((size_t)T * NB, -1);
+    std::vector<float> lm((size_t)T * NB, 0.0f);
+    auto *dl = dnew(lg), *dt = dnew(temp), *dlm = dnew(lm);
+    auto* di = dnew(idx);
+    auto *ds = dnew(seeds), *dp = dnew(pos), *dla = dnew(la);
+    v2_gumbel_sample_k<float, float, false, false><<<dim3(T, NB), 256>>>(
+        dla, NB, dlm, NB, nullptr, 0, nullptr, 0, dl, V, di, ds, dp, dt, V);
+    CK(hipDeviceSynchronize());
+    auto ga = d2h(dla, la.size());
+    auto gm = d2h(dlm, lm.size());
+    long mm = 0, oov = 0;
+    for (int t = 0; t < T; ++t)
+        for (int b = 0; b < NB; ++b) {
+            float bv; int bi;
+            host_block_argmax(lg.data() + (size_t)t * V, V, b * 1024, 1024, bv, bi);
+            const int64_t gi = ga[(size_t)t * NB + b];
+            const float gv = gm[(size_t)t * NB + b];
+            if (gi < 0 || gi >= V) ++oov;
+            if (gi != bi || !(gv == bv)) ++mm;
+        }
+    rep_exact("v2_gumbel argmax NaN/-inf/tail", mm, la.size());
+    rep_exact("v2_gumbel argmax index in [0,V)", oov, la.size());
+    CK(hipFree(dl)); CK(hipFree(dt)); CK(hipFree(dlm)); CK(hipFree(di));
+    CK(hipFree(ds)); CK(hipFree(dp)); CK(hipFree(dla));
+}
+
+__global__ void probe_block_argmax(const float* __restrict__ rows, int V, int nb,
+                                   float* out_v, int* out_i) {
+    const float* row = rows + (size_t)blockIdx.x * V;
+    float v; int i;
+    v2_block_argmax_8192<float>(row, blockIdx.y * 8192, V, v, i);
+    if (threadIdx.x == 0) {
+        out_v[blockIdx.x * nb + blockIdx.y] = v;
+        out_i[blockIdx.x * nb + blockIdx.y] = i;
+    }
+}
+
+__global__ void probe_block_sumexp(const float* __restrict__ rows, int V, int nb,
+                                   float* out_m, float* out_s) {
+    const float* row = rows + (size_t)blockIdx.x * V;
+    float m, s;
+    v2_block_max_sumexp_8192(row, blockIdx.y * 8192, V, m, s);
+    if (threadIdx.x == 0) {
+        out_m[blockIdx.x * nb + blockIdx.y] = m;
+        out_s[blockIdx.x * nb + blockIdx.y] = s;
+    }
+}
+
+static void test_block_stats_nan() {
+    const int T = 8, V = 10000, NB = (V + 8191) / 8192;  // 2 blocks, masked tail
+    std::vector<float> lg = make_rows(T, V, 11);
+    std::vector<float> ov((size_t)T * NB, 0.0f), om = ov, os = ov;
+    std::vector<int> oi((size_t)T * NB, -1);
+    auto* dl = dnew(lg);
+    auto *dov = dnew(ov), *dom = dnew(om), *dos = dnew(os);
+    auto* doi = dnew(oi);
+    probe_block_argmax<<<dim3(T, NB), 128>>>(dl, V, NB, dov, doi);
+    probe_block_sumexp<<<dim3(T, NB), 128>>>(dl, V, NB, dom, dos);
+    CK(hipDeviceSynchronize());
+    auto gv = d2h(dov, ov.size());
+    auto gi = d2h(doi, oi.size());
+    auto gm = d2h(dom, om.size());
+    auto gs = d2h(dos, os.size());
+    long mm = 0, oov = 0, bad_stats = 0;
+    double rel = 0.0;
+    for (int t = 0; t < T; ++t)
+        for (int b = 0; b < NB; ++b) {
+            const float* row = lg.data() + (size_t)t * V;
+            float bv; int bi;
+            host_block_argmax(row, V, b * 8192, 8192, bv, bi);
+            const size_t k = (size_t)t * NB + b;
+            if (gi[k] < 0 || gi[k] >= V) ++oov;
+            if (gi[k] != bi || !(gv[k] == bv)) ++mm;
+            // sumexp oracle in fp64 over sanitized values.
+            double s = 0.0;
+            if (bv > -INFINITY)
+                for (int j = b * 8192; j < (b + 1) * 8192 && j < V; ++j) {
+                    float x = row[j];
+                    if (x != x) x = -INFINITY;
+                    s += std::exp((double)x - (double)bv);
+                }
+            if (!(gm[k] == bv) || gs[k] != gs[k] || !std::isfinite(gs[k])) ++bad_stats;
+            if (s > 0.0) rel = std::max(rel, std::fabs((double)gs[k] - s) / s);
+            else if (gs[k] != 0.0f) ++bad_stats;
+        }
+    rep_exact("v2_block_argmax_8192 NaN/-inf", mm, oi.size());
+    rep_exact("v2_block_argmax_8192 index in [0,V)", oov, oi.size());
+    rep_exact("v2_block_max_sumexp finite/max", bad_stats, os.size());
+    rep_rel("v2_block_max_sumexp vs fp64", rel, 1e-5);
+    CK(hipFree(dl)); CK(hipFree(dov)); CK(hipFree(dom)); CK(hipFree(dos)); CK(hipFree(doi));
+}
+
+static void bench_argmax() {
+    // Greedy v2_gumbel_sample_k (temp 0): the per-block argmax that the NaN
+    // fix touches; one 1024-wide vocab block per CTA, 256 threads.
+    const int V = 151552, reps = 200, NB = (V + 1023) / 1024;
+    for (int T : {1, 4, 32, 64}) {
+        std::vector<float> lg((size_t)T * V, 1.0f);
+        std::vector<int32_t> idx(T, 0);
+        std::vector<int64_t> seeds(1, 0), pos(T, 0), la((size_t)T * NB, 0);
+        std::vector<float> temp(1, 0.0f), lm((size_t)T * NB, 0.0f);
+        auto *dl = dnew(lg), *dt = dnew(temp), *dlm = dnew(lm);
+        auto* di = dnew(idx);
+        auto *ds = dnew(seeds), *dp = dnew(pos), *dla = dnew(la);
+        hipEvent_t a, b;
+        CK(hipEventCreate(&a));
+        CK(hipEventCreate(&b));
+        for (int i = 0; i < 20; ++i)
+            v2_gumbel_sample_k<float, float, false, false><<<dim3(T, NB), 256>>>(
+                dla, NB, dlm, NB, nullptr, 0, nullptr, 0, dl, V, di, ds, dp, dt, V);
+        CK(hipDeviceSynchronize());
+        CK(hipEventRecord(a));
+        for (int i = 0; i < reps; ++i)
+            v2_gumbel_sample_k<float, float, false, false><<<dim3(T, NB), 256>>>(
+                dla, NB, dlm, NB, nullptr, 0, nullptr, 0, dl, V, di, ds, dp, dt, V);
+        CK(hipEventRecord(b));
+        CK(hipEventSynchronize(b));
+        float ms = 0;
+        CK(hipEventElapsedTime(&ms, a, b));
+        const double bytes = (double)T * V * sizeof(float);
+        printf("v2_gumbel argmax T=%d V=%d thr=256   %.4f ms  %.1f GB/s\n", T, V,
+               ms / reps, bytes / (ms / reps) / 1e6);
+        CK(hipEventDestroy(a));
+        CK(hipEventDestroy(b));
+        CK(hipFree(dl)); CK(hipFree(dt)); CK(hipFree(dlm)); CK(hipFree(di));
+        CK(hipFree(ds)); CK(hipFree(dp)); CK(hipFree(dla));
+    }
+}
+
 static void bench() {
     const int V = 151552, reps = 200;
     for (int T : {1, 4, 32, 64}) {
@@ -274,12 +458,15 @@ static void bench() {
 int main(int argc, char** argv) {
     if (argc > 1 && strcmp(argv[1], "--bench") == 0) {
         bench();
+        bench_argmax();
         return 0;
     }
     test_philox();
     test_bfly_width();
     test_temperature();
     test_min_p();
+    test_gumbel_argmax_nan();
+    test_block_stats_nan();
     printf("%s\n", g_fail ? "FAILED" : "ALL PASS");
     return g_fail ? 1 : 0;
 }

@@ -119,7 +119,16 @@ numerical closeness:
 The harness is torch-free, so Triton is not the in-process reference; each
 pinned property is checked against a host replay that is exact by construction
 — the Philox stream and `tl.rand` mapping bitwise, temperature and min_p by
-exact replay. 5/5 pass on MI300X.
+exact replay. 11/11 pass on MI300X.
+
+**NaN safety (2026-09-04, synced from SlimServe's 2026-08-10 fix):** the
+argmax combine is the positive form so a NaN candidate can never win, NaN
+logits sanitize to -inf before the max and the sum-exp folds, only in-vocab
+lanes are candidates, and an all--inf/NaN block resolves to its base index
+instead of a 0x7fffffff sentinel. The old form returned an out-of-vocab token
+(129280 == vocab_size) that crashed the DSV4 hash router.
+`test_gumbel_argmax_nan` and `test_block_stats_nan` pin the contract against
+a host oracle; `--bench` also times the greedy `v2_gumbel_sample_k` argmax.
 
 **Not ported:** the turboquant trio that shares the CUDA binding unit
 (`fwht_rotate`, `permute_cols`, `moe_lora_align`) — it pulls
